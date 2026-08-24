@@ -1,0 +1,171 @@
+/* Меню страниц новых миров (сад, футбол). Скопировано из realistic-tank.html:
+   у аквариума стили инлайном и трогать живую страницу незачем, а новые миры
+   делят одну копию между собой. Правки внешнего вида меню — здесь и там. */
+body { background: #101013; }
+.loading { position: fixed; inset: 0; display: grid; place-content: center; color: var(--muted); z-index: 30; }
+.loading[hidden] { display: none; }
+
+.menu {
+  position: fixed; inset: 0; z-index: 15;
+  display: grid; place-items: center; padding: 16px;
+  background: rgba(2, 10, 18, 0.55);
+  backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+  animation: menu-fade 0.16s ease-out;
+}
+.menu[hidden] { display: none; }
+@keyframes menu-fade { from { opacity: 0 } to { opacity: 1 } }
+
+.menu .card {
+  position: relative;
+  width: min(420px, 100%); max-height: 100%; overflow: auto;
+  background: rgba(6, 22, 38, 0.94);
+  border: 1px solid var(--line); border-radius: 20px;
+  padding: 20px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+  animation: menu-rise 0.18s ease-out;
+}
+@keyframes menu-rise { from { transform: translateY(14px); opacity: 0 } to { transform: none; opacity: 1 } }
+
+.menu h2 { margin: 0; padding-right: 40px; font-size: 19px; font-weight: 600; }
+.menu .rename {
+  display: inline-flex; align-items: center; gap: 8px;
+  margin: 0; padding: 0; font: inherit; color: inherit; text-align: left;
+  background: none; border: 0; cursor: pointer;
+}
+.menu .rename .pen { font-size: 13px; opacity: .45; transition: opacity .15s; }
+.menu .rename:hover { color: var(--accent); }
+.menu .rename:hover .pen { opacity: 1; }
+.menu .rename[disabled] { cursor: default; }
+.menu .rename[disabled]:hover { color: inherit; }
+.menu .who { margin: 4px 0 14px; font-size: 12px; color: var(--muted); }
+.menu .who .code {
+  font: 12px/1 "Segoe UI", system-ui, sans-serif;
+  color: var(--muted); background: rgba(88, 214, 255, 0.1);
+  border: 1px solid var(--line); border-radius: 8px; padding: 4px 8px;
+  cursor: pointer; transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.menu .who .code b {
+  font: 12px/1 ui-monospace, Consolas, monospace; letter-spacing: 1px;
+  font-weight: 600; color: var(--accent);
+}
+.menu .who .code:hover { background: rgba(88, 214, 255, 0.2); border-color: rgba(140, 200, 255, 0.45); color: var(--ink); }
+.menu .who .code + .code { margin-left: 6px; }
+.menu .who .code.warn {
+  color: #ffce7a; background: rgba(255, 190, 90, 0.12); border-color: rgba(255, 190, 90, 0.35);
+}
+
+.menu .qrbox {
+  flex: none; display: inline-block; line-height: 0;
+  background: #fff; border-radius: 10px; padding: 8px;
+}
+.menu .qrbox svg { display: block; width: 104px; height: 104px; }
+
+.menu .share .qrwrap { display: grid; place-items: center; gap: 10px; margin: 14px 0 16px; }
+.menu .share .qrwrap .qrbox svg { width: 168px; height: 168px; }
+.menu .share .qrhint { margin: 0; font-size: 12px; color: var(--muted); text-align: center; }
+
+.menu .share .pinbox {
+  margin: 2px 0 10px; padding: 14px 16px 12px; text-align: center;
+  background: rgba(88, 214, 255, 0.07);
+  border: 1px solid var(--line); border-radius: 14px;
+}
+.menu .share .pin {
+  font: 600 40px/1.1 ui-monospace, Consolas, monospace;
+  letter-spacing: 10px; text-indent: 10px; color: var(--accent);
+}
+.menu .share .pinhint { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+
+.menu .item {
+  display: flex; align-items: center; gap: 12px;
+  width: 100%; margin-bottom: 8px; padding: 11px 14px;
+  font: inherit; text-align: left; text-decoration: none; cursor: pointer;
+  color: var(--ink); background: rgba(88, 214, 255, 0.08);
+  border: 1px solid var(--line); border-radius: 14px;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+}
+.menu .item[hidden] { display: none; }
+.menu .item:hover { background: rgba(88, 214, 255, 0.18); border-color: rgba(140, 200, 255, 0.45); }
+.menu .item:active { transform: translateY(1px); }
+.menu .item.main { background: var(--accent); border-color: var(--accent); color: #04101c; }
+.menu .item.main:hover { background: #7ce0ff; }
+.menu .item .ico { flex: none; width: 26px; font-size: 21px; line-height: 1; text-align: center; }
+.menu .item b { display: block; font-size: 14px; font-weight: 600; }
+.menu .item i { display: block; font-style: normal; font-size: 12px; opacity: 0.72; }
+
+.menu .card.wide { width: min(640px, 100%); }
+
+.menu .goback {
+  display: block; margin: 0 0 12px; padding: 0; font: inherit; font-size: 13px;
+  color: var(--muted); background: none; border: 0; cursor: pointer;
+}
+.menu .goback:hover { color: var(--accent); }
+.menu .capframe {
+  display: block; width: 100%; height: min(70vh, 620px);
+  border: 0; border-radius: 14px; background: transparent;
+}
+
+.menu .langrow { display: flex; justify-content: center; margin-top: 12px; }
+.menu .langpick { display: inline-flex; gap: 4px; }
+.menu .langpick button {
+  appearance: none; cursor: pointer; font: inherit; font-size: 11.5px; letter-spacing: .5px;
+  padding: 4px 10px; border-radius: 8px; border: 1px solid transparent;
+  background: transparent; color: var(--muted);
+  transition: color .15s, background .15s, border-color .15s;
+}
+.menu .langpick button:hover { color: var(--ink); }
+.menu .langpick button[aria-pressed="true"] {
+  color: var(--accent); border-color: var(--line); background: rgba(88, 214, 255, 0.1);
+}
+
+.menu .x {
+  position: absolute; top: 14px; right: 14px;
+  width: 32px; height: 32px; padding: 0; border-radius: 50%;
+  display: grid; place-content: center;
+  font: inherit; font-size: 15px; line-height: 1; cursor: pointer;
+  color: var(--muted); background: rgba(88, 214, 255, 0.08);
+  border: 1px solid var(--line);
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.menu .x:hover { color: var(--ink); background: rgba(88, 214, 255, 0.2); border-color: rgba(140, 200, 255, 0.45); }
+
+.taphint {
+  position: fixed; z-index: 6; left: 50%; bottom: 20px; transform: translateX(-50%);
+  padding: 8px 16px; font-size: 12px; white-space: nowrap; pointer-events: none;
+  color: var(--muted); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 999px;
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  animation: taphint-pulse 2.6s ease-in-out infinite;
+}
+.taphint[hidden] { display: none; }
+@keyframes taphint-pulse { 0%, 100% { opacity: 0.5 } 50% { opacity: 1 } }
+
+/* Табло футбольного поля. У сада не используется. */
+.scoreboard {
+  position: fixed; z-index: 5; top: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; align-items: center; gap: 12px; padding: 8px 18px;
+  font: 600 20px/1 ui-monospace, Consolas, monospace; color: var(--ink);
+  background: rgba(4, 16, 28, 0.72); border: 1px solid var(--line); border-radius: 14px;
+  backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);
+  pointer-events: none;
+}
+.scoreboard .chip { width: 14px; height: 14px; border-radius: 50%; }
+.scoreboard .chip.red { background: #ff5a5a; }
+.scoreboard .chip.blue { background: #4a9dff; }
+.scoreboard .goal {
+  position: fixed; z-index: 5; top: 64px; left: 50%; transform: translateX(-50%);
+}
+.goalflash {
+  position: fixed; z-index: 5; top: 18vh; left: 0; right: 0; text-align: center;
+  font: 800 clamp(40px, 9vw, 90px)/1 "Segoe UI", system-ui, sans-serif;
+  letter-spacing: 4px; pointer-events: none;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.5);
+  animation: goalflash-pop 2.6s ease-out forwards;
+}
+.goalflash.red { color: #ff7a7a; }
+.goalflash.blue { color: #7ab5ff; }
+@keyframes goalflash-pop {
+  0% { transform: scale(0.4); opacity: 0 }
+  12% { transform: scale(1.1); opacity: 1 }
+  20% { transform: scale(1) }
+  80% { opacity: 1 }
+  100% { opacity: 0 }
+}

@@ -40,18 +40,62 @@
   // ── проекция модели на боковую плоскость ────────────────────────────────
   // Базис берём из FishFrame — тот же, по которому рыба ориентируется в сцене.
   // Любое расхождение здесь означает, что раскрашенный нос окажется на хвосте.
-  function projectTriangles(gltf) {
+  // Оси и голова для модели без скелета: тело — самый длинный габарит,
+  // бок — самый короткий; голова там, где тело толще с боков.
+  function boundsFrame(root, b) {
+    var order = [['x', b.size.x], ['y', b.size.y], ['z', b.size.z]]
+      .sort(function (a, c) { return c[1] - a[1]; });
+    var body = order[0][0], up = order[1][0], lat = order[2][0];
+    var span = b.size[body] || 1;
+    var thickLow = 0, thickHigh = 0, v = new THREE.Vector3();
+    root.traverse(function (o) {
+      if (!o.isMesh) return;
+      var p = o.geometry.attributes.position;
+      for (var i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
+        var t = (v[body] - b.box.min[body]) / span;
+        var lateral = Math.abs(v[lat] - b.center[lat]);
+        if (t < 0.18) thickLow = Math.max(thickLow, lateral);
+        else if (t > 0.82) thickHigh = Math.max(thickHigh, lateral);
+      }
+    });
+    return { axes: { body: body, up: up, lat: lat }, headAtMax: thickHigh > thickLow };
+  }
+
+  // Оси листа по проекции — та же таблица, что в assets/painted-uv.js:
+  //   side  — [z, y], глубина x (профиль рыбы, поведение как раньше)
+  //   top   — [x, z], глубина y (насекомое сверху, голова вверх листа)
+  //   front — [x, y], глубина z (футболист анфас)
+  // В координатах box имена оставлены старые: Z — горизонталь листа,
+  // Y — вертикаль, X — глубина. Для side это буквально так и было.
+  var SHEET_AXES = { side: ['z', 'y', 'x'], top: ['x', 'z', 'y'], front: ['x', 'y', 'z'] };
+
+  // spec: {projection, frame} из tools/model-sources.json.
+  function projectTriangles(gltf, spec) {
     var root = gltf.scene;
     root.updateWorldMatrix(true, true);
 
-    var skel = FishFrame.fromSkeleton(gltf);
     var b = FishFrame.bounds(root);
-    var quat = FishFrame.orientQuat(skel.axes, skel.headAtMax, b);
+    var skel, M;
+    if (spec && spec.frame === 'identity') {
+      // Модель нормализована при конвертации (нос → +Z, спина → +Y):
+      // эвристики только навредили бы — у бабочки размах шире длины тела.
+      skel = { axes: { body: 'z', up: 'y', lat: 'x' }, headAtMax: true };
+      M = new THREE.Matrix4().makeTranslation(-b.center.x, -b.center.y, -b.center.z);
+    } else {
+      skel = FishFrame.fromSkeleton(gltf);
+      // Модели без скелета: оси по габаритам, голова по боковой толщине
+      // краёв — тот же запасной путь, что у сцены в fish-glb.js.
+      if (!skel) skel = boundsFrame(root, b);
+      var quat = FishFrame.orientQuat(skel.axes, skel.headAtMax, b);
+      // ориентируем и центрируем: нос → +Z, спина → +Y, габарит вокруг нуля
+      M = new THREE.Matrix4()
+        .makeRotationFromQuaternion(quat)
+        .multiply(new THREE.Matrix4().makeTranslation(-b.center.x, -b.center.y, -b.center.z));
+    }
 
-    // ориентируем и центрируем: нос → +Z, спина → +Y, габарит вокруг нуля
-    var M = new THREE.Matrix4()
-      .makeRotationFromQuaternion(quat)
-      .multiply(new THREE.Matrix4().makeTranslation(-b.center.x, -b.center.y, -b.center.z));
+    var ax = SHEET_AXES[(spec && spec.projection) || 'side'];
+    var a0 = ax[0], a1 = ax[1], ad = ax[2];
 
     var tris = [], v = new THREE.Vector3();
     var box = { minZ: Infinity, maxZ: -Infinity, minY: Infinity, maxY: -Infinity,
@@ -67,14 +111,14 @@
       var pts = [];
       for (var i = 0; i < count; i++) {
         v.fromBufferAttribute(p, idx ? idx[i] : i).applyMatrix4(full);
-        // x — вбок от плоскости симметрии: по нему видно, что ближе к зрителю
-        pts.push(v.z, v.y, v.x);
-        if (v.x < box.minX) box.minX = v.x;
-        if (v.x > box.maxX) box.maxX = v.x;
-        if (v.z < box.minZ) box.minZ = v.z;
-        if (v.z > box.maxZ) box.maxZ = v.z;
-        if (v.y < box.minY) box.minY = v.y;
-        if (v.y > box.maxY) box.maxY = v.y;
+        // глубина — от плоскости листа: по ней видно, что ближе к зрителю
+        pts.push(v[a0], v[a1], v[ad]);
+        if (v[ad] < box.minX) box.minX = v[ad];
+        if (v[ad] > box.maxX) box.maxX = v[ad];
+        if (v[a0] < box.minZ) box.minZ = v[a0];
+        if (v[a0] > box.maxZ) box.maxZ = v[a0];
+        if (v[a1] < box.minY) box.minY = v[a1];
+        if (v[a1] > box.maxY) box.maxY = v[a1];
       }
       tris.push(pts);
     });
@@ -352,8 +396,8 @@
     return out;
   }
 
-  function extract(gltf) {
-    var pr = projectTriangles(gltf);
+  function extract(gltf, spec) {
+    var pr = projectTriangles(gltf, spec);
     var r = rasterize(pr.tris, pr.box);
     var comp = largestComponent(morph(r.mask, 3, 2));
     var raw = traceBoundary(comp.mask);
@@ -401,7 +445,8 @@
       points: contour.length,
       // доля закрашенного в габарите: у «колючих» рыб она низкая
       fill: +(comp.area / ((spanZ * r.scale) * (spanY * r.scale))).toFixed(3),
-      axes: pr.skel.axes, headAtMax: pr.skel.headAtMax
+      axes: pr.skel.axes, headAtMax: pr.skel.headAtMax,
+      projection: (spec && spec.projection) || 'side'
     };
   }
 
@@ -452,7 +497,11 @@
   var results = {};
   window.SIL = results;
 
-  fetch('/api/pack').then(function (r) { return r.json(); }).then(function (list) {
+  // Список видов с листами — свой файл, а не /api/pack: с появлением миров
+  // модели живут не только в паке, а проекция и frame — знание пайплайна,
+  // серверу оно ни к чему. tools/model-sources.json правится руками вместе
+  // со SPECIES в make-coloring.js.
+  fetch('/tools/model-sources.json').then(function (r) { return r.json(); }).then(function (list) {
     var i = 0;
     (function next() {
       if (i >= list.length) {
@@ -483,7 +532,7 @@
         var cell = document.createElement('div');
         cell.className = 'cell';
         var res = null;
-        try { res = extract(gltf); } catch (e) { console.error(m.name, e); }
+        try { res = extract(gltf, m); } catch (e) { console.error(m.name, e); }
         if (res) {
           results[m.name] = res;
           draw(cell, res);

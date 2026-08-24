@@ -1,0 +1,531 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Футбольное поле</title>
+<link rel="stylesheet" href="/assets/ui.css">
+<link rel="stylesheet" href="/assets/world-page.css">
+</head>
+<body>
+
+<div class="loading" id="loading"></div>
+
+<!-- Табло: HTML-оверлей — резкий на любом экране и переводится как всё
+     остальное. Сцена под ним живёт своей жизнью. -->
+<div class="scoreboard" id="scoreboard" hidden>
+  <span class="chip red"></span><span id="score">0 : 0</span><span class="chip blue"></span>
+</div>
+
+<script src="/vendor/three.min.js"></script>
+<script src="/vendor/GLTFLoader.js"></script>
+<script src="/vendor/DRACOLoader.js"></script>
+<script src="/vendor/SkeletonUtils.js"></script>
+<script src="/assets/i18n.js"></script>
+<script src="/vendor/qr.js"></script>
+<script src="/assets/fish-frame.js"></script>
+<script src="/assets/fish-glb.js"></script>
+<script src="/assets/painted-uv.js"></script>
+<script src="/assets/steering.js"></script>
+<script src="/assets/modal.js"></script>
+<script src="/assets/tank.js"></script>
+<script src="/assets/world-page.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ── поле ─────────────────────────────────────────────────────────────────
+  // Ворота слева и справа, камера смотрит вдоль поля с небольшой высоты —
+  // оба створа в кадре.
+  var FIELD = { hx: 11, zNear: 5.5, zFar: -7 };   // границы бега по x и z
+  var GOAL = { x: 11, halfZ: 2.2, h: 2.6 };       // створ: |z| < halfZ
+  var CAM_POS = [0, 8.5, 17], CAM_TARGET = [0, 1.2, -1];
+  var MARGIN = 1.0, WALL = 6;
+
+  var TEAM_COLOR = { red: 0xff5a5a, blue: 0x4a9dff };
+  var GOAL_GAP = 16;        // секунд тишины после гола: ворота «закрыты»
+
+  var renderer, scene, camera, clock;
+  var players = [], ball = null;
+  var score = { red: 0, blue: 0 };
+  var goalClosedUntil = 0;
+  var celebrating = 0;      // до какой секунды команда радуется
+  var celebratingTeam = null;
+
+  // ── игрок ────────────────────────────────────────────────────────────────
+  var templateSpec = null, templateQueue = [];
+
+  function withPlayerModel(info, cb) {
+    if (templateSpec) return cb(templateSpec);
+    templateQueue.push(cb);
+    if (templateQueue.length > 1) return;
+    var spec = { url: info.model, length: info.length, frame: 'identity', lengthAxis: 'y' };
+    FishGLB.load([spec], function () {
+      templateSpec = spec.gltf ? spec : null;
+      templateQueue.forEach(function (fn) { fn(templateSpec); });
+      templateQueue = [];
+    });
+  }
+
+  function clipOf(spec, part) {
+    var clips = (spec.gltf.animations || []);
+    for (var i = 0; i < clips.length; i++) {
+      if (clips[i].name.indexOf(part) !== -1) return clips[i];
+    }
+    return clips[0] || null;
+  }
+
+  function Player(item, info, tex, spec) {
+    this.id = item.id;
+    this.team = item.team === 'blue' ? 'blue' : item.team === 'red' ? 'red' : nextTeam();
+    this.size = item.size || 1;
+    this.height = info.length * this.size;
+    this.phase = Math.random() * 6.28;
+
+    var clone = THREE.SkeletonUtils.clone(spec.gltf.scene);
+    var pivot = new THREE.Group();
+    pivot.quaternion.copy(spec.info.quat);
+    pivot.scale.setScalar(spec.info.scale * this.size);
+    pivot.add(clone);
+
+    // Планарная UV «анфас» — та же рамка, которой capture.js кадрирует лист.
+    var holder = new THREE.Group();
+    holder.add(pivot);
+    PaintedUV.applyPlanar(holder, 'front');
+    holder.remove(pivot);
+
+    clone.traverse(function (o) {
+      if (!o.isMesh) return;
+      // skinning обязателен: без него меш застынет в позе привязки (r128)
+      o.material = new THREE.MeshStandardMaterial({
+        map: tex, roughness: 0.7, metalness: 0.02,
+        side: THREE.DoubleSide, skinning: !!o.isSkinnedMesh
+      });
+    });
+
+    this.mesh = new THREE.Group();
+    this.mesh.add(pivot);
+    // Ноги на земле: модель отцентрована по габариту, опускаем на полроста.
+    pivot.position.y = this.height / 2;
+
+    // Кольцо команды у ног: раскрашенную форму ребёнок мог сделать любого
+    // цвета — без кольца не видно, за кого игрок.
+    var ringMat = new THREE.MeshBasicMaterial({
+      color: TEAM_COLOR[this.team], transparent: true, opacity: 0.9, side: THREE.DoubleSide
+    });
+    ringMat.toneMapped = false;   // цвет команды должен оставаться цветом команды
+    var ring = new THREE.Mesh(
+      new THREE.RingGeometry(this.height * 0.26, this.height * 0.36, 24), ringMat
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.position.y = 0.03;
+    this.mesh.add(ring);
+
+    this.mixer = new THREE.AnimationMixer(clone);
+    this.actions = {
+      run: this.mixer.clipAction(clipOf(spec, 'Run')),
+      celebrate: this.mixer.clipAction(clipOf(spec, 'Clapping'))
+    };
+    this.actions.run.play();
+    this.current = 'run';
+
+    this.pos = new THREE.Vector3(
+      (Math.random() * 2 - 1) * (FIELD.hx - 2),
+      0,
+      FIELD.zFar + 1 + Math.random() * (FIELD.zNear - FIELD.zFar - 2)
+    );
+    this.speed = 2.0 + Math.random() * 0.7;
+    this.vel = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5)
+      .normalize().multiplyScalar(this.speed);
+    scene.add(this.mesh);
+  }
+
+  var _a = new THREE.Vector3(), _d = new THREE.Vector3(), _look = new THREE.Vector3();
+
+  function play(p, name) {
+    if (p.current === name) return;
+    p.actions[p.current].fadeOut(0.2);
+    p.actions[name].reset().fadeIn(0.2).play();
+    p.current = name;
+  }
+
+  Player.prototype.update = function (dt, t) {
+    // Гол: команда-именинница стоит и хлопает, соперники разбредаются.
+    if (t < celebrating && this.team === celebratingTeam) {
+      play(this, 'celebrate');
+      this.mixer.update(dt);
+      // лицом к зрителю — радуются в камеру
+      this.mesh.lookAt(_look.set(this.pos.x, 0, this.pos.z + 5));
+      return;
+    }
+    play(this, 'run');
+
+    _a.set(0, 0, 0);
+    Steering.wander(_a, t, this.phase, 1.2);
+    _a.y = 0;
+
+    // Двое-трое ближайших к мячу бегут к нему — выглядит как игра, а не как
+    // променад. Остальные блуждают и держат дистанцию друг от друга.
+    if (ball && this.chasing) {
+      _d.copy(ball.pos).sub(this.pos);
+      _d.y = 0;
+      if (_d.lengthSq() > 0.2) _a.addScaledVector(_d.normalize(), 3.2);
+    }
+
+    // не слипаться
+    for (var i = 0; i < players.length; i++) {
+      var o = players[i];
+      if (o === this) continue;
+      var dd = this.pos.distanceTo(o.pos);
+      if (dd < 1.4 && dd > 0.001) {
+        _d.copy(this.pos).sub(o.pos).divideScalar(dd * dd);
+        _a.addScaledVector(_d, 1.8);
+      }
+    }
+
+    // границы поля
+    if (this.pos.x > FIELD.hx - MARGIN) _a.x -= WALL;
+    if (this.pos.x < -FIELD.hx + MARGIN) _a.x += WALL;
+    if (this.pos.z > FIELD.zNear - MARGIN) _a.z -= WALL;
+    if (this.pos.z < FIELD.zFar + MARGIN) _a.z += WALL;
+
+    this.vel.y = 0;
+    Steering.step(this, _a, dt);
+    this.pos.y = 0;
+
+    this.mesh.position.copy(this.pos);
+    if (this.vel.lengthSq() > 0.01) {
+      _look.copy(this.pos).add(_d.set(this.vel.x, 0, this.vel.z));
+      this.mesh.lookAt(_look);
+    }
+
+    // Темп бега — от скорости: шагов на метр примерно поровну.
+    this.mixer.update(dt * Math.max(0.4, Math.min(1.8, this.vel.length() / 2.2)));
+
+    // Удар: мяч рядом — толкаем вперёд с разбросом, к чужим воротам чаще.
+    if (ball && t > ball.noKickUntil) {
+      var bd = this.pos.distanceTo(ball.pos);
+      if (bd < this.height * 0.55) {
+        var dir = _d.set(this.vel.x, 0, this.vel.z).normalize();
+        // лёгкий прицел в сторону ворот соперника
+        var gx = this.team === 'red' ? GOAL.x : -GOAL.x;
+        dir.x += (gx - ball.pos.x) * 0.045;
+        dir.z += (0 - ball.pos.z) * 0.03;
+        dir.x += (Math.random() - 0.5) * 0.8;
+        dir.z += (Math.random() - 0.5) * 0.8;
+        dir.normalize();
+        ball.vel.copy(dir).multiplyScalar(6 + Math.random() * 5);
+        ball.noKickUntil = t + 0.4;
+        ball.lastTeam = this.team;
+      }
+    }
+  };
+
+  // ── мяч ──────────────────────────────────────────────────────────────────
+  function ballTexture() {
+    var c = document.createElement('canvas');
+    c.width = c.height = 128;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = '#f4f4f4';
+    ctx.fillRect(0, 0, 128, 128);
+    ctx.fillStyle = '#222';
+    for (var y = 0; y < 4; y++) {
+      for (var x = 0; x < 4; x++) {
+        ctx.beginPath();
+        ctx.arc(x * 32 + (y % 2 ? 16 : 0), y * 32, 9, 0, 6.3);
+        ctx.fill();
+      }
+    }
+    var tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.encoding = THREE.sRGBEncoding;
+    return tex;
+  }
+
+  function makeBall() {
+    var r = 0.34;
+    var mesh = new THREE.Mesh(
+      new THREE.SphereGeometry(r, 20, 14),
+      new THREE.MeshStandardMaterial({ map: ballTexture(), roughness: 0.6 })
+    );
+    mesh.position.y = r;
+    scene.add(mesh);
+    return {
+      mesh: mesh, r: r,
+      pos: new THREE.Vector3(0, r, 0),
+      vel: new THREE.Vector3(0, 0, 0),
+      noKickUntil: 0,
+      lastTeam: null
+    };
+  }
+
+  function resetBall() {
+    ball.pos.set(0, ball.r, 0);
+    ball.vel.set(0, 0, 0);
+  }
+
+  function updateBall(dt, t) {
+    ball.vel.multiplyScalar(Math.pow(0.35, dt));    // трение газона
+    ball.pos.addScaledVector(ball.vel, dt);
+
+    // Гол? Мяч уходит за линию в створе. После гола ворота ненадолго
+    // «закрыты» — мяч отскакивает, чтобы табло не крутилось как счётчик.
+    if (Math.abs(ball.pos.x) > GOAL.x - ball.r) {
+      var inMouth = Math.abs(ball.pos.z) < GOAL.halfZ;
+      if (inMouth && t > goalClosedUntil && ball.lastTeam) {
+        goalScored(ball.lastTeam, t);
+      } else {
+        ball.pos.x = Math.sign(ball.pos.x) * (GOAL.x - ball.r);
+        ball.vel.x *= -0.55;
+      }
+    }
+    if (ball.pos.z > FIELD.zNear - ball.r) { ball.pos.z = FIELD.zNear - ball.r; ball.vel.z *= -0.55; }
+    if (ball.pos.z < FIELD.zFar + ball.r) { ball.pos.z = FIELD.zFar + ball.r; ball.vel.z *= -0.55; }
+
+    ball.mesh.position.copy(ball.pos);
+    // качение: поворот на пройденный путь
+    var sp = ball.vel.length();
+    if (sp > 0.01) {
+      _d.set(ball.vel.z, 0, -ball.vel.x).normalize();
+      ball.mesh.rotateOnWorldAxis(_d, sp * dt / ball.r);
+    }
+
+    // назначить преследователей: двое ближайших
+    var byDist = players.slice().sort(function (a, b) {
+      return a.pos.distanceTo(ball.pos) - b.pos.distanceTo(ball.pos);
+    });
+    players.forEach(function (p) { p.chasing = false; });
+    byDist.slice(0, Math.min(3, byDist.length)).forEach(function (p) { p.chasing = true; });
+  }
+
+  // ── гол ──────────────────────────────────────────────────────────────────
+  var confetti = null;
+
+  function goalScored(team, t) {
+    score[team]++;
+    renderScore();
+    goalClosedUntil = t + GOAL_GAP;
+    celebrating = t + 2.6;
+    celebratingTeam = team;
+    resetBall();
+    ball.lastTeam = null;
+
+    var flash = document.createElement('div');
+    flash.className = 'goalflash ' + team;
+    flash.textContent = I18N.t('fb.goal');
+    document.body.appendChild(flash);
+    setTimeout(function () { flash.remove(); }, 2700);
+
+    burstConfetti(team);
+    WorldPage.wantShot(1.5);
+  }
+
+  function renderScore() {
+    document.getElementById('score').textContent = score.red + ' : ' + score.blue;
+  }
+
+  function burstConfetti(team) {
+    if (confetti) { scene.remove(confetti.points); confetti = null; }
+    var N = 220;
+    var pos = new Float32Array(N * 3), vel = [];
+    for (var i = 0; i < N; i++) {
+      pos[i * 3] = (Math.random() - 0.5) * 4;
+      pos[i * 3 + 1] = 3 + Math.random() * 2;
+      pos[i * 3 + 2] = (Math.random() - 0.5) * 4;
+      vel.push(new THREE.Vector3(
+        (Math.random() - 0.5) * 3, 2 + Math.random() * 3, (Math.random() - 0.5) * 3));
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    var points = new THREE.Points(geo, new THREE.PointsMaterial({
+      color: TEAM_COLOR[team], size: 0.14, transparent: true, opacity: 0.95
+    }));
+    scene.add(points);
+    confetti = { points: points, vel: vel, born: clock.elapsedTime };
+  }
+
+  function updateConfetti(dt) {
+    if (!confetti) return;
+    var age = clock.elapsedTime - confetti.born;
+    var p = confetti.points.geometry.attributes.position;
+    for (var i = 0; i < confetti.vel.length; i++) {
+      var v = confetti.vel[i];
+      v.y -= 4.5 * dt;
+      p.array[i * 3] += v.x * dt;
+      p.array[i * 3 + 1] += v.y * dt;
+      p.array[i * 3 + 2] += v.z * dt;
+    }
+    p.needsUpdate = true;
+    confetti.points.material.opacity = Math.max(0, 1 - age / 2.4);
+    if (age > 2.5) { scene.remove(confetti.points); confetti = null; }
+  }
+
+  // Записи без команды (например, добавленные руками) делим поровну.
+  function nextTeam() {
+    var red = 0, blue = 0;
+    players.forEach(function (p) { if (p.team === 'red') red++; else blue++; });
+    return red <= blue ? 'red' : 'blue';
+  }
+
+  // ── окружение ────────────────────────────────────────────────────────────
+  function gradientTexture(stops) {
+    var c = document.createElement('canvas');
+    c.width = 4; c.height = 256;
+    var ctx = c.getContext('2d');
+    var g = ctx.createLinearGradient(0, 0, 0, 256);
+    stops.forEach(function (s) { g.addColorStop(s[0], s[1]); });
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 4, 256);
+    var tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    return tex;
+  }
+
+  // Разметка рисуется канвасом: полосатый газон, линии, круг, штрафные.
+  function fieldTexture() {
+    var W = 1024, H = 640;
+    var c = document.createElement('canvas');
+    c.width = W; c.height = H;
+    var ctx = c.getContext('2d');
+    for (var i = 0; i < 8; i++) {
+      ctx.fillStyle = i % 2 ? '#3f9646' : '#46a24e';
+      ctx.fillRect(i * W / 8, 0, W / 8, H);
+    }
+    ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+    ctx.lineWidth = 6;
+    var pad = 28;
+    ctx.strokeRect(pad, pad, W - pad * 2, H - pad * 2);
+    ctx.beginPath();
+    ctx.moveTo(W / 2, pad); ctx.lineTo(W / 2, H - pad);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(W / 2, H / 2, 80, 0, 6.3);
+    ctx.stroke();
+    // штрафные
+    ctx.strokeRect(pad, H / 2 - 130, 120, 260);
+    ctx.strokeRect(W - pad - 120, H / 2 - 130, 120, 260);
+    var tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    tex.anisotropy = 4;
+    return tex;
+  }
+
+  function makeGoal(x) {
+    var g = new THREE.Group();
+    var mat = new THREE.MeshLambertMaterial({ color: 0xf2f2f2 });
+    var r = 0.09;
+    var post = new THREE.CylinderGeometry(r, r, GOAL.h, 10);
+    var p1 = new THREE.Mesh(post, mat);
+    p1.position.set(0, GOAL.h / 2, -GOAL.halfZ);
+    var p2 = new THREE.Mesh(post, mat);
+    p2.position.set(0, GOAL.h / 2, GOAL.halfZ);
+    var bar = new THREE.Mesh(new THREE.CylinderGeometry(r, r, GOAL.halfZ * 2 + r * 2, 10), mat);
+    bar.rotation.x = Math.PI / 2;
+    bar.position.set(0, GOAL.h, 0);
+    g.add(p1, p2, bar);
+    g.position.x = x;
+    scene.add(g);
+  }
+
+  function buildEnvironment() {
+    scene.background = gradientTexture([[0, '#8ecdf2'], [0.65, '#c6e6f5'], [1, '#daf0e2']]);
+    scene.fog = new THREE.Fog(0xcfe8dd, 30, 80);
+
+    scene.add(new THREE.HemisphereLight(0xd8ecff, 0x3f7a3a, 0.85));
+    var sun = new THREE.DirectionalLight(0xfff1d6, 1.0);
+    sun.position.set(-14, 24, 12);
+    scene.add(sun);
+
+    // само поле: чуть больше зоны бега, разметка по краю зоны
+    var field = new THREE.Mesh(
+      new THREE.PlaneGeometry((FIELD.hx + 2.4) * 2, (FIELD.zNear - FIELD.zFar) + 5),
+      new THREE.MeshLambertMaterial({ map: fieldTexture() })
+    );
+    field.rotation.x = -Math.PI / 2;
+    field.position.set(0, 0, (FIELD.zNear + FIELD.zFar) / 2);
+    scene.add(field);
+
+    // земля вокруг поля до горизонта
+    var around = new THREE.Mesh(
+      new THREE.PlaneGeometry(240, 140),
+      new THREE.MeshLambertMaterial({ color: 0x55913f })
+    );
+    around.rotation.x = -Math.PI / 2;
+    around.position.set(0, -0.02, -20);
+    scene.add(around);
+
+    makeGoal(-GOAL.x);
+    makeGoal(GOAL.x);
+  }
+
+  // ── сцена ────────────────────────────────────────────────────────────────
+  function init() {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    document.body.appendChild(renderer.domElement);
+
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(42, innerWidth / innerHeight, 0.1, 220);
+    camera.position.set(CAM_POS[0], CAM_POS[1], CAM_POS[2]);
+    camera.lookAt(CAM_TARGET[0], CAM_TARGET[1], CAM_TARGET[2]);
+    clock = new THREE.Clock();
+
+    buildEnvironment();
+    ball = makeBall();
+    renderScore();
+    document.getElementById('scoreboard').hidden = false;
+    document.getElementById('loading').hidden = true;
+
+    WorldPage.attachShots(renderer, scene, camera, clock);
+    WorldPage.wantShot(3.5);
+    addEventListener('resize', onResize);
+    animate();
+  }
+
+  function onResize() {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    var dt = Math.min(clock.getDelta(), 0.05);
+    var t = clock.elapsedTime;
+    FishGLB.uTime.value = t;
+    for (var i = 0; i < players.length; i++) players[i].update(dt, t);
+    if (ball && players.length) updateBall(dt, t);
+    updateConfetti(dt);
+    renderer.render(scene, camera);
+    WorldPage.tickShots(t);
+  }
+
+  WorldPage.boot({
+    world: 'football',
+    counter: 'players',
+    hooks: {
+      init: init,
+      spawnPainted: function (item, info, tex, done) {
+        withPlayerModel(info, function (spec) {
+          if (!spec) return done(null);
+          tex.encoding = THREE.sRGBEncoding;
+          var p = new Player(item, info, tex, spec);
+          players.push(p);
+          done(p);
+        });
+      },
+      removePainted: function (p) {
+        scene.remove(p.mesh);
+        var i = players.indexOf(p);
+        if (i !== -1) players.splice(i, 1);
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

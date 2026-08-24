@@ -128,11 +128,18 @@ function titleOf(f) {
   return (f.titles && (f.titles[I18N.lang] || f.titles.ru)) || f.title;
 }
 
+// ?world=garden|football|aquarium — листы одного мира: меню сцены передаёт
+// свой мир, чтобы в саду не печатали рыб. Без параметра — все листы подряд.
+var WORLD = new URLSearchParams(location.search).get('world');
+
 fetch('/assets/coloring/manifest.json')
   .then(function (r) { return r.json(); })
   .then(function (m) {
     var list = document.getElementById('list');
-    m.fish.forEach(function (f) {
+    var fish = m.fish.filter(function (f) {
+      return !WORLD || (f.world || 'aquarium') === WORLD;
+    });
+    fish.forEach(function (f) {
       var card = document.createElement('div');
       card.className = 'card';
       card.dataset.fish = f.name;

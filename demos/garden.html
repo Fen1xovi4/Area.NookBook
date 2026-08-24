@@ -1,0 +1,390 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Сад</title>
+<link rel="stylesheet" href="/assets/ui.css">
+<link rel="stylesheet" href="/assets/world-page.css">
+</head>
+<body>
+
+<div class="loading" id="loading"></div>
+
+<!-- Пути абсолютные: страница отдаётся по /t/<id>, относительные сломались бы. -->
+<script src="/vendor/three.min.js"></script>
+<script src="/vendor/GLTFLoader.js"></script>
+<script src="/vendor/DRACOLoader.js"></script>
+<script src="/assets/i18n.js"></script>
+<script src="/vendor/qr.js"></script>
+<script src="/assets/fish-frame.js"></script>
+<script src="/assets/fish-glb.js"></script>
+<script src="/assets/painted-uv.js"></script>
+<script src="/assets/steering.js"></script>
+<script src="/assets/modal.js"></script>
+<script src="/assets/tank.js"></script>
+<script src="/assets/world-page.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ── объём полёта ─────────────────────────────────────────────────────────
+  // Та же пирамида обзора, что в аквариуме: границы совпадают с кадром.
+  var Z_NEAR = 5, Z_FAR = -14;
+  var FLOOR = 0;
+  var FLIGHT_MIN = 1.2;      // ниже не опускаются — трава
+  var MARGIN = 1.4, WALL = 5;
+  var CAM_POS = [0, 5.2, 15.5], CAM_TARGET = [0, 5.2, 0];
+  var FOV = 42;
+  var TAN_HALF_FOV = Math.tan(FOV / 2 * Math.PI / 180);
+
+  function limitsAt(z) {
+    var d = CAM_POS[2] - z;
+    var half = d * TAN_HALF_FOV;
+    var aspect = camera ? camera.aspect : innerWidth / innerHeight;
+    var yc = CAM_TARGET[1];
+    return {
+      hw: half * aspect + MARGIN,
+      yTop: yc + half + MARGIN,
+      yBot: Math.max(FLIGHT_MIN, yc - half - MARGIN)
+    };
+  }
+
+  var renderer, scene, camera, clock;
+  var insects = [];
+  var uTime = { value: 0 };
+
+  // ── характеры насекомых ──────────────────────────────────────────────────
+  // speed — крейсерская, flap — [частота Гц, доля размаха], jitter — сила
+  // случайных рывков курса, hover — глубина «зависаний» (0 — не зависает).
+  var KINDS = {
+    butterflymonarch: { speed: 1.5, flap: [7, 0.16], jitter: 1.6, hover: 0 },
+    butterflymorpho:  { speed: 1.4, flap: [6, 0.18], jitter: 1.6, hover: 0 },
+    butterflyorange:  { speed: 1.6, flap: [8, 0.15], jitter: 1.8, hover: 0 },
+    ladybug:          { speed: 0.9, flap: [0, 0],    jitter: 0.4, hover: 0 },
+    bee:              { speed: 2.1, flap: [26, 0.4], jitter: 1.0, hover: 0.8 },
+    dragonfly:        { speed: 2.6, flap: [22, 0.2], jitter: 2.6, hover: 0.5 }
+  };
+  var KIND_DEFAULT = { speed: 1.5, flap: [8, 0.15], jitter: 1.5, hover: 0 };
+
+  // ── мах крыльев в вершинном шейдере ──────────────────────────────────────
+  // Модели статичные, крылья отдельными узлами не выделены, поэтому машем
+  // геометрией: чем дальше вершина от тела (|x| в локальных осях модели),
+  // тем сильнее её качает вверх-вниз. Ладybug с амплитудой 0 просто плывёт.
+  function addFlap(mat, span, freq, part, phase) {
+    if (!freq || !part) return mat;
+    var uniforms = {
+      uTime: uTime,
+      uFlapAmp: { value: span * part },      // размах качания кончика крыла
+      uFlapFreq: { value: freq },
+      uFlapPhase: { value: phase },
+      uHinge: { value: span * 0.06 },        // у тела крыло не качается
+      uHalfSpan: { value: Math.max(span * 0.5, 0.0001) }
+    };
+    var prev = mat.onBeforeCompile;
+    mat.onBeforeCompile = function (shader) {
+      if (prev) prev.call(this, shader);
+      Object.keys(uniforms).forEach(function (k) { shader.uniforms[k] = uniforms[k]; });
+      shader.vertexShader =
+        'uniform float uTime; uniform float uFlapAmp; uniform float uFlapFreq;\n' +
+        'uniform float uFlapPhase; uniform float uHinge; uniform float uHalfSpan;\n' +
+        shader.vertexShader.replace('#include <begin_vertex>', [
+          '#include <begin_vertex>',
+          'float wing = clamp((abs(transformed.x) - uHinge) / uHalfSpan, 0.0, 1.0);',
+          'transformed.y += wing * uFlapAmp * sin(uTime * uFlapFreq + uFlapPhase);'
+        ].join('\n'));
+    };
+    mat.customProgramCacheKey = function () { return (prev ? 'prev+' : '') + 'flap'; };
+    return mat;
+  }
+
+  // ── шаблоны видов ────────────────────────────────────────────────────────
+  // Как в аквариуме: модель одна на вид, каждый экземпляр — клон с планарной
+  // UV по рамке листа (top: размах по горизонтали, голова вверх).
+  var templates = {}, templateQueue = {};
+
+  function withTemplate(info, cb) {
+    if (templates[info.name]) return cb(templates[info.name]);
+    if (templateQueue[info.name]) return templateQueue[info.name].push(cb);
+    templateQueue[info.name] = [cb];
+    var spec = { url: info.model, length: info.length, frame: info.frame };
+    FishGLB.load([spec], function () {
+      var t = null;
+      if (spec.gltf) {
+        var clone = spec.gltf.scene;
+        // У части моделей нормалей нет вовсе (конвертация из OBJ) — без них
+        // MeshStandardMaterial рисует чёрный силуэт.
+        clone.traverse(function (o) {
+          if (o.isMesh && !o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+        });
+        var pivot = new THREE.Group();
+        pivot.quaternion.copy(spec.info.quat);
+        pivot.scale.setScalar(spec.info.scale);
+        pivot.add(clone);
+        var holder = new THREE.Group();
+        holder.add(pivot);
+        PaintedUV.applyPlanar(holder, info.projection || 'top');
+        holder.remove(pivot);
+
+        // размах крыльев в локальных единицах модели — для шейдера маха
+        var box = new THREE.Box3().setFromObject(clone);
+        t = { scene: clone, info: spec.info, span: box.max.x - box.min.x };
+        templates[info.name] = t;
+      }
+      templateQueue[info.name].forEach(function (fn) { fn(t); });
+      delete templateQueue[info.name];
+    });
+    return null;
+  }
+
+  // ── насекомое ────────────────────────────────────────────────────────────
+  function Insect(info, tpl, tex, size) {
+    var kindP = KINDS[info.name] || KIND_DEFAULT;
+    this.p = kindP;
+    this.len = info.length * (size || 1);
+    this.phase = Math.random() * 6.28;
+
+    var clone = tpl.scene.clone(true);
+    var pivot = new THREE.Group();
+    pivot.quaternion.copy(tpl.info.quat);
+    pivot.scale.setScalar(tpl.info.scale * (size || 1));
+    pivot.add(clone);
+
+    var self = this;
+    clone.traverse(function (o) {
+      if (!o.isMesh) return;
+      o.material = addFlap(new THREE.MeshStandardMaterial({
+        map: tex, roughness: 0.6, metalness: 0.05, side: THREE.DoubleSide
+      }), tpl.span, kindP.flap[0], kindP.flap[1], self.phase);
+    });
+
+    this.mesh = new THREE.Group();
+    this.mesh.add(pivot);
+
+    var z0 = Z_FAR + Math.random() * (Z_NEAR - Z_FAR);
+    var l0 = limitsAt(z0);
+    this.pos = new THREE.Vector3(
+      (Math.random() * 2 - 1) * Math.max(0.5, l0.hw - MARGIN),
+      l0.yBot + MARGIN + Math.random() * Math.max(0.5, l0.yTop - l0.yBot - MARGIN * 2),
+      z0
+    );
+    this.baseSpeed = kindP.speed * (0.85 + Math.random() * 0.3);
+    this.speed = this.baseSpeed;
+    this.vel = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5)
+      .normalize().multiplyScalar(this.speed);
+    this.nextJolt = 0;
+    scene.add(this.mesh);
+  }
+
+  var _a = new THREE.Vector3(), _look = new THREE.Vector3();
+
+  Insect.prototype.update = function (dt, t) {
+    _a.set(0, 0, 0);
+    Steering.wander(_a, t, this.phase, 1);
+
+    // порхание: лёгкая вертикальная качка в темпе крыльев
+    var flapHz = this.p.flap[0] || 6;
+    _a.y += Math.sin(t * Math.min(flapHz, 9) * 0.7 + this.phase) * 0.9;
+
+    // случайные рывки курса — бабочку носит, стрекоза дёргается
+    if (t > this.nextJolt) {
+      this.nextJolt = t + 0.5 + Math.random() * 0.9;
+      this.vel.x += (Math.random() - 0.5) * this.p.jitter;
+      this.vel.y += (Math.random() - 0.5) * this.p.jitter * 0.6;
+      this.vel.z += (Math.random() - 0.5) * this.p.jitter;
+    }
+
+    // зависания: скорость проседает и возвращается волной
+    if (this.p.hover) {
+      var w = 0.5 + 0.5 * Math.sin(t * 0.5 + this.phase * 2.1);
+      this.speed = Math.max(0.3, this.baseSpeed * (1 - this.p.hover * w));
+    }
+
+    Steering.confine(_a, this.pos, limitsAt(this.pos.z), Z_NEAR, Z_FAR, MARGIN, WALL);
+    Steering.step(this, _a, dt);
+
+    // Нос по ходу, но без крутого пикирования: бабочка почти не наклоняется.
+    _look.copy(this.vel);
+    _look.y *= 0.35;
+    if (_look.lengthSq() < 1e-6) _look.set(0, 0, 1);
+    this.mesh.position.copy(this.pos);
+    this.mesh.lookAt(_look.add(this.pos));
+    this.mesh.rotation.z += Math.sin(t * 1.8 + this.phase) * 0.05;
+  };
+
+  // ── окружение ────────────────────────────────────────────────────────────
+  function gradientTexture(stops) {
+    var c = document.createElement('canvas');
+    c.width = 4; c.height = 256;
+    var ctx = c.getContext('2d');
+    var g = ctx.createLinearGradient(0, 0, 0, 256);
+    stops.forEach(function (s) { g.addColorStop(s[0], s[1]); });
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 4, 256);
+    var tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    return tex;
+  }
+
+  function groundTexture() {
+    var c = document.createElement('canvas');
+    c.width = c.height = 256;
+    var ctx = c.getContext('2d');
+    ctx.fillStyle = '#69a84f';
+    ctx.fillRect(0, 0, 256, 256);
+    for (var i = 0; i < 900; i++) {
+      ctx.fillStyle = ['#5f9c46', '#74b558', '#639f4a', '#7dbd60'][i % 4];
+      ctx.beginPath();
+      ctx.arc(Math.random() * 256, Math.random() * 256, 2 + Math.random() * 5, 0, 6.3);
+      ctx.fill();
+    }
+    var tex = new THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+    tex.repeat.set(8, 4);
+    tex.encoding = THREE.sRGBEncoding;
+    return tex;
+  }
+
+  // Цветы и трава — процедурные: пара примитивов на цветок, зато никаких
+  // лишних ассетов и атрибуций. Ребёнок смотрит на своих бабочек, не на луг.
+  function makeFlower(palette) {
+    var g = new THREE.Group();
+    var stemH = 0.8 + Math.random() * 1.4;
+    var stem = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.04, 0.06, stemH, 5),
+      new THREE.MeshLambertMaterial({ color: 0x3e7a33 })
+    );
+    stem.position.y = stemH / 2;
+    g.add(stem);
+    var color = palette[Math.floor(Math.random() * palette.length)];
+    var petalMat = new THREE.MeshLambertMaterial({ color: color });
+    for (var i = 0; i < 6; i++) {
+      var petal = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 5), petalMat);
+      petal.scale.set(1, 0.35, 0.55);
+      var ang = i / 6 * Math.PI * 2;
+      petal.position.set(Math.cos(ang) * 0.2, stemH, Math.sin(ang) * 0.2);
+      petal.rotation.y = -ang;
+      g.add(petal);
+    }
+    var core = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11, 8, 6),
+      new THREE.MeshLambertMaterial({ color: 0xf7d54a })
+    );
+    core.position.y = stemH + 0.04;
+    g.add(core);
+    return g;
+  }
+
+  function makeGrass() {
+    var g = new THREE.Group();
+    var mat = new THREE.MeshLambertMaterial({ color: 0x4d8c3c });
+    for (var i = 0; i < 3; i++) {
+      var blade = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.5 + Math.random() * 0.5, 4), mat);
+      blade.position.set((Math.random() - 0.5) * 0.3, 0.3, (Math.random() - 0.5) * 0.3);
+      blade.rotation.z = (Math.random() - 0.5) * 0.4;
+      g.add(blade);
+    }
+    return g;
+  }
+
+  function buildEnvironment() {
+    scene.background = gradientTexture([[0, '#8ed0f5'], [0.6, '#bfe6f7'], [1, '#e8f6d8']]);
+    scene.fog = new THREE.Fog(0xcfe9f2, 22, 60);
+
+    scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x568a3f, 0.85));
+    var sun = new THREE.DirectionalLight(0xfff1d6, 1.0);
+    sun.position.set(12, 22, 10);
+    scene.add(sun);
+
+    var ground = new THREE.Mesh(
+      new THREE.PlaneGeometry(160, 90),
+      new THREE.MeshLambertMaterial({ map: groundTexture() })
+    );
+    ground.rotation.x = -Math.PI / 2;
+    ground.position.set(0, 0, -20);
+    scene.add(ground);
+
+    var palette = [0xe86a92, 0xf2f2f2, 0xb277d8, 0xf2a03d, 0xd8524f, 0x7ab5e8];
+    for (var i = 0; i < 26; i++) {
+      var f = makeFlower(palette);
+      f.position.set((Math.random() * 2 - 1) * 26, 0, 4 - Math.random() * 22);
+      f.rotation.y = Math.random() * 6.3;
+      var s = 0.8 + Math.random() * 0.7;
+      f.scale.setScalar(s);
+      scene.add(f);
+    }
+    for (var j = 0; j < 60; j++) {
+      var gr = makeGrass();
+      gr.position.set((Math.random() * 2 - 1) * 30, 0, 5 - Math.random() * 26);
+      scene.add(gr);
+    }
+  }
+
+  // ── сцена ────────────────────────────────────────────────────────────────
+  function init() {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.0;
+    document.body.appendChild(renderer.domElement);
+
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(FOV, innerWidth / innerHeight, 0.1, 200);
+    camera.position.set(CAM_POS[0], CAM_POS[1], CAM_POS[2]);
+    camera.lookAt(CAM_TARGET[0], CAM_TARGET[1], CAM_TARGET[2]);
+    clock = new THREE.Clock();
+
+    buildEnvironment();
+    document.getElementById('loading').hidden = true;
+
+    WorldPage.attachShots(renderer, scene, camera, clock);
+    WorldPage.wantShot(3.5);
+    addEventListener('resize', onResize);
+    animate();
+  }
+
+  function onResize() {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    var dt = Math.min(clock.getDelta(), 0.05);
+    var t = clock.elapsedTime;
+    uTime.value = t;
+    FishGLB.uTime.value = t;
+    for (var i = 0; i < insects.length; i++) insects[i].update(dt, t);
+    renderer.render(scene, camera);
+    WorldPage.tickShots(t);
+  }
+
+  WorldPage.boot({
+    world: 'garden',
+    counter: 'insects',
+    hooks: {
+      init: init,
+      spawnPainted: function (item, info, tex, done) {
+        withTemplate(info, function (tpl) {
+          if (!tpl) return done(null);
+          tex.encoding = THREE.sRGBEncoding;
+          tex.flipY = true;
+          var insect = new Insect(info, tpl, tex, item.size);
+          insects.push(insect);
+          done(insect);
+        });
+      },
+      removePainted: function (insect) {
+        scene.remove(insect.mesh);
+        var i = insects.indexOf(insect);
+        if (i !== -1) insects.splice(i, 1);
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

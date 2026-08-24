@@ -12,19 +12,22 @@
 //                               хранится только scrypt-хеш.
 //
 // Страницы:
-//   /                     — список своих аквариумов
-//   /t/<id>               — сам аквариум
+//   /                     — список своих пространств
+//   /t/<id>               — сцена: аквариум, сад или футбольное поле — по
+//                           полю world из meta (нет поля = аквариум)
 //   /t/<id>/admin         — управление
 //   /t/<id>/capture       — съёмка листа с телефона
 //   /print.html           — раскраски (общие для всех)
 //
-// Общее для всех аквариумов:
-//   POST   /api/tanks {name, password?} — создать → {id, name, created, password}
+// Общее для всех пространств:
+//   POST   /api/tanks {name, password?, world?} — создать → {id, name, created, world, password};
+//                           world: aquarium (по умолчанию) | garden | football,
+//                           выбирается один раз и не меняется
 //   GET    /api/pack                  — покупные модели рыб [{name, title, url}]
 //
 // Внутри аквариума, префикс /api/t/<id>. Помеченные 🔒 требуют заголовок
 // X-Tank-Pass с паролем аквариума:
-//   GET    …/meta                     — {id, name, created, locked, fishCount, preview, backgroundUrl}
+//   GET    …/meta                     — {id, name, created, locked, world, fishCount, preview, backgroundUrl}
 //   POST   …/auth {password}          — проверить пароль
 //   POST   …/password {password}   🔒 — сменить пароль
 //   POST   …/preview {image}          — снимок сцены для карточки на главной
@@ -32,7 +35,8 @@
 //   DELETE …                       🔒 — удалить аквариум целиком (в data/trash-tanks)
 //   GET    …/fish                     — список рыбок [{id, kind, created}]
 //   GET    …/fish/<fid>/texture.png   — текстура рыбки
-//   POST   …/fish {kind, texture}     — добавить раскрашенную (dataURL png/jpeg)
+//   POST   …/fish {kind, texture, team?, face?} — добавить раскрашенную (dataURL
+//                                       png/jpeg); team red|blue и face — футбол
 //   POST   …/fish {type:'pack',model} — добавить покупную из пака
 //   DELETE …/fish/<fid>            🔒 — удалить одну рыбку
 //   DELETE …/fish                  🔒 — очистить аквариум
@@ -169,7 +173,16 @@ function readMeta(t) {
 // Наружу отдаём без соли и хеша: в meta.json они соседи имени, а в ответе
 // им делать нечего. locked — есть ли у аквариума пароль вообще.
 function publicMeta(m) {
-  return { id: m.id, name: m.name, created: m.created, locked: !!m.hash };
+  return { id: m.id, name: m.name, created: m.created, locked: !!m.hash, world: worldOf(m) };
+}
+
+// ── миры ───────────────────────────────────────────────────────────────────
+// Тип пространства выбирается при создании и больше не меняется. Старые
+// meta.json поля world не имеют — они аквариумы, как и всё, что было до миров.
+const WORLDS = ['aquarium', 'garden', 'football'];
+
+function worldOf(m) {
+  return WORLDS.includes(m && m.world) ? m.world : 'aquarium';
 }
 
 // ── пак покупных моделей ───────────────────────────────────────────────────
@@ -662,11 +675,17 @@ function handleTankApi(req, res, t, url) {
         return send(res, 413, '{"error":"картинка рыбки слишком тяжёлая"}');
       }
       ensureTank(t);
+      // Множитель размера с ползунка на съёмке. Кламп обязателен: поле идёт
+      // прямо в сцену, и рыбка «size: 100» заслонила бы весь аквариум.
+      const size = Math.round(Math.min(1.5, Math.max(0.5, Number(data.size) || 1)) * 100) / 100;
       const png = Buffer.from(data.texture.split(',')[1], 'base64');
       fs.writeFileSync(path.join(t.fish, fid + '.png'), png);
-      fs.writeFileSync(path.join(t.fish, fid + '.json'), JSON.stringify({
-        id: fid, kind: String(data.kind), created: new Date().toISOString()
-      }));
+      const rec = { id: fid, kind: String(data.kind), size, created: new Date().toISOString() };
+      // Футбольные поля: команда игрока и признак «текстура — фото лица».
+      // Белый список, а не String(): поле уходит прямо в сцену.
+      if (data.team === 'red' || data.team === 'blue') rec.team = data.team;
+      if (data.face === true) rec.face = true;
+      fs.writeFileSync(path.join(t.fish, fid + '.json'), JSON.stringify(rec));
       console.log(`+ рыбка ${data.kind} в ${t.id} (${Math.round(png.length / 1024)} КБ) — всего ${listFish(t).length}`);
       send(res, 200, JSON.stringify({ ok: true, id: fid }));
     });
@@ -830,18 +849,25 @@ function handleApi(req, res, url) {
       // кому переслали ссылку.
       const pass = String(data.password || '').trim() || makePass();
       const salt = crypto.randomBytes(16).toString('hex');
+      const world = WORLDS.includes(data.world) ? data.world : 'aquarium';
       const meta = {
         id,
         name: String(data.name || '').trim().slice(0, 60) || 'Мой аквариум',
         created: new Date().toISOString(),
+        world,
         salt,
         hash: hashPass(pass, salt)
       };
       fs.writeFileSync(t.meta, JSON.stringify(meta));
       // Новый аквариум сразу с картинкой: какая достанется — дело случая.
-      const background = randomBackground();
-      writeSettings(t, { background });
-      console.log(`+ аквариум «${meta.name}» (${id}), фон ${background}`);
+      // Сад и футбол рисуют окружение сами, фон-фотография им не нужен.
+      if (world === 'aquarium') {
+        const background = randomBackground();
+        writeSettings(t, { background });
+        console.log(`+ аквариум «${meta.name}» (${id}), фон ${background}`);
+      } else {
+        console.log(`+ ${world} «${meta.name}» (${id})`);
+      }
       // Единственный раз, когда пароль уходит с сервера в открытом виде:
       // страница показывает его хозяину и просит сохранить.
       send(res, 200, JSON.stringify(Object.assign(publicMeta(meta), { password: pass })));
@@ -860,13 +886,20 @@ function handleApi(req, res, url) {
 // ── статика ────────────────────────────────────────────────────────────────
 // Красивые адреса аквариума разворачиваются в обычные файлы. Сами страницы
 // достают id из location.pathname, поэтому файл один на все аквариумы.
+const WORLD_PAGES = {
+  aquarium: 'demos/realistic-tank.html',
+  garden: 'demos/garden.html',
+  football: 'demos/football.html'
+};
+
 function pageFor(url) {
   if (url === '/') return 'index.html';
   const m = url.match(/^\/t\/([^/]+)(?:\/(admin|capture))?\/?$/);
   if (!m || !TANK_ID_RE.test(m[1])) return null;
   if (m[2] === 'admin') return 'admin.html';
   if (m[2] === 'capture') return 'capture.html';
-  return 'demos/realistic-tank.html';
+  // Страница сцены зависит от мира: он записан в meta при создании.
+  return WORLD_PAGES[worldOf(readMeta(tank(m[1])))];
 }
 
 // Раздаём перечисленное, а не всё, что лежит рядом с сервером. Иначе по сети

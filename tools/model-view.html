@@ -1,0 +1,104 @@
+<!doctype html>
+<!-- Смотровая для моделей пайплайна: ?url=/tools/tmp-models/x.glb
+     Четыре ракурса без всякой автоориентации — как модель лежит в файле,
+     так и видно. По ним выбираются axes/frame для tools/model-sources.json.
+     Готовность: window.VIEW_DONE. Габарит модели: window.VIEW_BOX. -->
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Смотровая моделей</title>
+<style>
+  body { margin: 0; background: #f4f6f8; font: 13px/1.4 "Segoe UI", sans-serif; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; padding: 8px; }
+  .cell { background: #fff; border: 1px solid #ccc; border-radius: 8px; padding: 6px; text-align: center; }
+  canvas { width: 100%; height: auto; display: block; }
+  #info { padding: 4px 10px; color: #333; }
+</style>
+</head>
+<body>
+<div id="info">загрузка…</div>
+<div class="grid" id="grid"></div>
+<script src="/vendor/three.min.js"></script>
+<script src="/vendor/GLTFLoader.js"></script>
+<script src="/vendor/DRACOLoader.js"></script>
+<script>
+(function () {
+  'use strict';
+  var url = new URLSearchParams(location.search).get('url');
+  var info = document.getElementById('info');
+  if (!url) { info.textContent = 'нужен ?url=…'; return; }
+
+  var loader = new THREE.GLTFLoader();
+  if (THREE.DRACOLoader) {
+    var d = new THREE.DRACOLoader();
+    d.setDecoderPath('/vendor/draco/');
+    loader.setDRACOLoader(d);
+  }
+
+  // Ракурсы: откуда смотрит камера (в осях модели).
+  var VIEWS = [
+    { name: 'перспектива', dir: [1, 0.7, 1] },
+    { name: 'с +X (сбоку)', dir: [1, 0, 0] },
+    { name: 'с +Y (сверху)', dir: [0, 1, 0.0001] },
+    { name: 'с +Z (спереди)', dir: [0, 0, 1] }
+  ];
+
+  loader.load(url, function (gltf) {
+    var root = gltf.scene;
+    root.updateWorldMatrix(true, true);
+    var box = new THREE.Box3().setFromObject(root);
+    var size = box.getSize(new THREE.Vector3());
+    var center = box.getCenter(new THREE.Vector3());
+    var radius = Math.max(size.x, size.y, size.z);
+
+    window.VIEW_BOX = { x: +size.x.toFixed(3), y: +size.y.toFixed(3), z: +size.z.toFixed(3) };
+    info.textContent = url + ' · габарит x=' + window.VIEW_BOX.x +
+      ' y=' + window.VIEW_BOX.y + ' z=' + window.VIEW_BOX.z +
+      ' · анимаций: ' + (gltf.animations ? gltf.animations.length : 0) +
+      (gltf.animations && gltf.animations.length
+        ? ' (' + gltf.animations.map(function (a) { return a.name; }).join(', ') + ')' : '');
+
+    var grid = document.getElementById('grid');
+    VIEWS.forEach(function (view) {
+      var cell = document.createElement('div');
+      cell.className = 'cell';
+      var canvas = document.createElement('canvas');
+      canvas.width = 360; canvas.height = 300;
+      var renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, preserveDrawingBuffer: true });
+      renderer.setClearColor(0xf0f3f6);
+      var scene = new THREE.Scene();
+      scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+      var dl = new THREE.DirectionalLight(0xffffff, 0.7);
+      dl.position.set(3, 5, 4);
+      scene.add(dl);
+      scene.add(root);   // одна модель кочует по сценам: рендерим по очереди
+
+      var cam = new THREE.PerspectiveCamera(35, 360 / 300, radius / 100, radius * 10);
+      var dir = new THREE.Vector3(view.dir[0], view.dir[1], view.dir[2]).normalize();
+      cam.position.copy(center).addScaledVector(dir, radius * 2.2);
+      cam.lookAt(center);
+      renderer.render(scene, cam);
+
+      // Оси для ориентировки: X красная, Y зелёная, Z синяя.
+      var axes = new THREE.AxesHelper(radius * 0.8);
+      axes.position.copy(center);
+      scene.add(axes);
+      renderer.render(scene, cam);
+      scene.remove(axes);
+
+      var b = document.createElement('b');
+      b.textContent = view.name;
+      cell.appendChild(canvas);
+      cell.appendChild(b);
+      grid.appendChild(cell);
+    });
+
+    window.VIEW_DONE = true;
+  }, undefined, function (err) {
+    info.textContent = 'не загрузилось: ' + err;
+    window.VIEW_DONE = true;
+  });
+})();
+</script>
+</body>
+</html>

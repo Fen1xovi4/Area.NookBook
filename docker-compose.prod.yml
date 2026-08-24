@@ -43,7 +43,7 @@ services:
       - "traefik.docker.network=web"
       - "traefik.http.routers.aqua.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.aqua.entrypoints=websecure"
-      - "traefik.http.routers.aqua.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.aqua.tls.certresolver=le"
       - "traefik.http.services.aqua.loadbalancer.server.port=8000"
       # Сцена тянет three.js и модели рыб — сжатие заметно ускоряет первую
       # загрузку. Картинки Traefik не жмёт: они и так сжаты.

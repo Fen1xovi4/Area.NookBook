@@ -332,6 +332,7 @@
 <script src="/assets/i18n.js"></script>
 <script src="/vendor/qr.js"></script>
 <script src="/assets/fish-frame.js"></script>
+<script src="/assets/painted-uv.js"></script>
 <script src="/assets/fish-thumbs.js"></script>
 <script src="/assets/modal.js"></script>
 <script src="/assets/tank.js"></script>
@@ -1057,36 +1058,10 @@
     pivot.add(clone);
     var holder = new THREE.Group();
     holder.add(pivot);
-    holder.updateMatrixWorld(true);
-
-    var meshes = [];
-    clone.traverse(function (o) { if (o.isMesh) meshes.push(o); });
-
-    var v = new THREE.Vector3();
-    var min = { z: Infinity, y: Infinity }, max = { z: -Infinity, y: -Infinity };
-    meshes.forEach(function (o) {
-      var p = o.geometry.attributes.position;
-      for (var i = 0; i < p.count; i++) {
-        v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
-        if (v.z < min.z) min.z = v.z;
-        if (v.z > max.z) max.z = v.z;
-        if (v.y < min.y) min.y = v.y;
-        if (v.y > max.y) max.y = v.y;
-      }
-    });
-    var spanZ = Math.max(max.z - min.z, 1e-6), spanY = Math.max(max.y - min.y, 1e-6);
-
-    meshes.forEach(function (o) {
-      var g = o.geometry = o.geometry.clone();
-      var p = g.attributes.position;
-      var uv = new Float32Array(p.count * 2);
-      for (var i = 0; i < p.count; i++) {
-        v.fromBufferAttribute(p, i).applyMatrix4(o.matrixWorld);
-        uv[i * 2] = (v.z - min.z) / spanZ;          // u: хвост → нос
-        uv[i * 2 + 1] = (v.y - min.y) / spanY;      // v: брюхо → спина
-      }
-      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-    });
+    // Планарная развёртка бокового силуэта — общим модулем: той же парой
+    // осей capture.js кадрирует рисунок с листа, а превью съёмки строит
+    // такую же UV. Все аквариумные виды — «side».
+    PaintedUV.applyPlanar(holder, 'side');
 
     holder.remove(pivot);
     pivot.remove(clone);
@@ -1094,11 +1069,13 @@
     return paintedTemplates[kind];
   }
 
-  function spawnPainted(kind, tex, cb) {
+  // size — множитель с ползунка на съёмке (сервер держит его в 0.5–1.5);
+  // растёт настоящая длина, так что физика и границы считаются от неё же.
+  function spawnPainted(kind, tex, size, cb) {
     withPaintedTemplate(kind, function (tpl) {
       if (!tpl) return cb(null);
       tex.encoding = THREE.sRGBEncoding;
-      var base = tpl.base, len = paintedLen(kind);
+      var base = tpl.base, len = paintedLen(kind) * (size || 1);
       var spec = {
         name: 'painted-' + kind,
         // Анимацию отдаём настоящую: у покупных моделей скелет и есть весь
@@ -1251,7 +1228,7 @@
         paintedSeen[item.id] = null;   // текстура в пути
         new THREE.TextureLoader().load(Tank.api + '/fish/' + item.id + '/texture.png', function (tex) {
           if (!paintedSeen.hasOwnProperty(item.id)) return;   // удалили, пока грузилась
-          spawnPainted(item.kind, tex, function (fish) {
+          spawnPainted(item.kind, tex, item.size, function (fish) {
             // модель ехала дольше текстуры — рыбку могли успеть удалить
             if (!fish) return;
             if (paintedSeen.hasOwnProperty(item.id)) { paintedSeen[item.id] = fish; wantShot(4); }
@@ -1648,7 +1625,8 @@
 
   function showPrintView() {
     showView(menuPrint, true);
-    frameUp(printFrame, '/print.html?embed=1');
+    // Только аквариумные листы: бабочек и футболистов печатают их миры.
+    frameUp(printFrame, '/print.html?embed=1&world=aquarium');
   }
 
   function showPackView() {

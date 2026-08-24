@@ -89,6 +89,9 @@
     display: flex; align-items: center; gap: 12px;
     margin: 14px 2px 0; text-align: left;
   }
+  /* display: flex сильнее браузерного [hidden] — у игрока «из фото»
+     ползунок яркости прячется, ему нечего подкручивать. */
+  .boostrow[hidden] { display: none; }
   .boostrow label { flex: none; color: var(--muted); font-size: 14px; }
   .boostrow input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); }
 
@@ -124,6 +127,32 @@
   }
   .qrrow .qrbox svg { display: block; width: 96px; height: 96px; }
   .qrrow .qrtext { color: var(--muted); font-size: 13px; }
+
+  /* Футбол: два способа сделать игрока — раскраска или фото лица. */
+  #mode-cards .big i { display: block; font-style: normal; font-size: 13px; font-weight: 400; opacity: 0.75; }
+  #mode-cards[hidden] { display: none; }
+
+  /* Выбор команды на превью: две крупные кнопки, выбранная — с рамкой. */
+  .teamlabel { color: var(--muted); font-size: 14px; margin: 16px 0 0; }
+  .teamrow { display: flex; gap: 10px; margin-top: 8px; }
+  .teamrow[hidden] { display: none; }
+  .teamrow button {
+    flex: 1; font: inherit; font-size: 16px; font-weight: 600; color: #fff;
+    padding: 12px; border-radius: 14px; cursor: pointer;
+    border: 2px solid transparent; opacity: 0.5;
+    transition: opacity 0.15s, border-color 0.15s;
+  }
+  .teamrow button.red { background: #c9403f; }
+  .teamrow button.blue { background: #2f6fc4; }
+  .teamrow button[aria-pressed="true"] { opacity: 1; border-color: #fff; }
+
+  /* Овальное кадрирование лица: фото двигают пальцем, приближают ползунком. */
+  .facewrap { position: relative; width: 100%; max-width: 340px; margin: 10px auto 0; }
+  .facewrap canvas {
+    display: block; width: 100%; border-radius: 16px;
+    background: #0a2233; touch-action: none; cursor: grab;
+    border: 1px solid rgba(140, 200, 255, 0.25);
+  }
 </style>
 </head>
 <body>
@@ -136,13 +165,32 @@
 <!-- старт -->
 <div class="screen on" id="s-start">
   <div class="bubble">📷</div>
-  <label class="big" for="file" data-t="cap.shoot"></label>
+  <!-- Футбол предлагает два пути: раскрашенный лист или фото лица.
+       В остальных мирах карточек нет — сразу кнопка съёмки листа. -->
+  <div id="mode-cards" hidden>
+    <label class="big" for="file"><span data-t="cap.mode.color"></span><i data-t="cap.mode.color.sub"></i></label>
+    <label class="big green" for="face-file"><span data-t="cap.mode.face"></span><i data-t="cap.mode.face.sub"></i></label>
+  </div>
+  <label class="big" for="file" id="shoot-label" data-t="cap.shoot"></label>
   <input type="file" id="file" accept="image/*" capture="environment">
+  <input type="file" id="face-file" accept="image/*" capture="user">
   <p class="hintline" data-t="cap.hint"></p>
   <div class="qrrow" id="qrrow" hidden>
     <span class="qrbox" id="cap-qr"></span>
     <span class="qrtext" data-t="cap.qr"></span>
   </div>
+</div>
+
+<!-- кадрирование лица (футбол) -->
+<div class="screen" id="s-face">
+  <p class="sub" data-t="cap.face.hint" style="margin-bottom:0"></p>
+  <div class="facewrap"><canvas id="face-canvas" width="640" height="640"></canvas></div>
+  <div class="boostrow">
+    <label for="face-zoom" data-t="cap.face.zoom"></label>
+    <input type="range" id="face-zoom" min="100" max="320" value="130">
+  </div>
+  <button class="big green" id="b-face-use" data-t="cap.face.use"></button>
+  <label class="big ghost" for="face-file" data-t="cap.face.retake"></label>
 </div>
 
 <!-- обработка -->
@@ -156,9 +204,18 @@
   <p class="fishname" id="p-name"></p>
   <div class="stage3d" id="stage3d"><div class="spin3d" id="spin3d" data-t="cap.reviving"></div></div>
   <img class="preview" id="p-img" data-t-alt="cap.photo" hidden>
-  <div class="boostrow">
+  <div class="boostrow" id="boost-row">
     <label for="boost" data-t="cap.boost"></label>
     <input type="range" id="boost" min="0" max="100" value="0">
+  </div>
+  <div class="boostrow">
+    <label for="size" data-t="cap.size"></label>
+    <input type="range" id="size" min="50" max="150" value="100">
+  </div>
+  <p class="teamlabel" id="team-label" data-t="cap.team" hidden></p>
+  <div class="teamrow" id="teamrow" hidden>
+    <button type="button" class="red" id="team-red" data-t="cap.team.red"></button>
+    <button type="button" class="blue" id="team-blue" data-t="cap.team.blue"></button>
   </div>
   <button class="big green" id="b-release" data-t="cap.release"></button>
   <label class="big ghost" for="file" data-t="cap.retake"></label>
@@ -187,6 +244,7 @@
      покупных рыб в превью развернётся хвостом вперёд -->
 <script src="/assets/fish-frame.js"></script>
 <script src="/assets/fish-glb.js"></script>
+<script src="/assets/painted-uv.js"></script>
 <script src="/assets/capture.js"></script>
 <script src="/assets/tank.js"></script>
 <script>
@@ -202,6 +260,38 @@
   // Страница открыта внутри меню аквариума — убираем всё, что там повторяется.
   var EMBED = new URLSearchParams(location.search).has('embed');
   if (EMBED) document.body.classList.add('embed');
+
+  // ── мир пространства ─────────────────────────────────────────────────────
+  // Одна страница снимает для всех миров; формулировки и лишние экраны
+  // зависят от мира из meta. Пока он не приехал — аквариумные тексты.
+  var WORLD = 'aquarium';
+
+  // «ключ.мир», если такой перевод есть, иначе базовый ключ.
+  function wtKey(key) {
+    var k2 = key + '.' + WORLD;
+    return I18N.t(k2) !== k2 ? k2 : key;
+  }
+
+  function worldize() {
+    if (WORLD === 'aquarium') return;
+    // Подменяем сами data-t: перевод останется правильным и после смены языка.
+    ['data-t', 'data-t-alt', 'data-t-ph'].forEach(function (attr) {
+      document.querySelectorAll('[' + attr + ']').forEach(function (el) {
+        el.setAttribute(attr, wtKey(el.getAttribute(attr)));
+      });
+    });
+    I18N.apply(document);
+    document.title = I18N.t(wtKey('cap.title'));
+    if (WORLD === 'football') {
+      document.getElementById('mode-cards').hidden = false;
+      document.getElementById('shoot-label').hidden = true;
+    }
+  }
+
+  fetch(Tank.api + '/meta')
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (m) { if (m && m.world) { WORLD = m.world; worldize(); } })
+    .catch(function () { /* останутся аквариумные тексты */ });
 
   // На устройстве без тача «Сфотографировать лист» открывает выбор файла —
   // тупик: камера у человека в кармане. Показываем мост: QR прямо на эту
@@ -287,28 +377,23 @@
     return true;
   }
 
-  // Геометрия вида с планарной UV бокового силуэта — та же рамка,
-  // по которой capture.js кадрирует текстуру. Кэш по виду.
+  // Геометрия вида с планарной UV по рамке листа — та же пара осей,
+  // которой capture.js кадрирует текстуру: side / top / front из манифеста.
+  // Кэш по виду.
   function fishGeo(kind, cb) {
     if (P3.geos[kind]) return cb(P3.geos[kind]);
     var fish = null;
     manifest.fish.forEach(function (f) { if (f.name === kind) fish = f; });
     if (!fish) return cb(null);
-    var spec = { url: fish.model, length: 2.4 };
+    var spec = { url: fish.model, length: 2.4, frame: fish.frame, lengthAxis: fish.lengthAxis };
     FishGLB.load([spec], function () {
       if (!spec.gltf) return cb(null);
       var geo = FishGLB.bake(spec);
+      PaintedUV.applyPlanar(geo, fish.projection || 'side');
       geo.computeBoundingBox();
       var bb = geo.boundingBox;
-      var sz = Math.max(bb.max.z - bb.min.z, 1e-6), sy = Math.max(bb.max.y - bb.min.y, 1e-6);
-      var p = geo.attributes.position;
-      var uv = new Float32Array(p.count * 2);
-      for (var i = 0; i < p.count; i++) {
-        uv[i * 2] = (p.getZ(i) - bb.min.z) / sz;
-        uv[i * 2 + 1] = (p.getY(i) - bb.min.y) / sy;
-      }
-      geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
       geo.userData.range = [bb.min.z, bb.max.z];
+      geo.userData.projection = fish.projection || 'side';
       P3.geos[kind] = geo;
       cb(geo);
     });
@@ -338,19 +423,25 @@
       }
       // Текстура прямо из канваса, а не через dataURL: ползунок «Ярче цвета»
       // перерисовывает канвас, и рыбке хватает needsUpdate — без PNG.
-      var tex = new THREE.CanvasTexture(result.boost.texCanvas);
+      // У игрока «из фото» канвас свой — его перерисовывает выбор команды.
+      var tex = new THREE.CanvasTexture(result.boost ? result.boost.texCanvas : result.texCanvas);
       tex.encoding = THREE.sRGBEncoding;
       var mat = new THREE.MeshStandardMaterial({
         map: tex, roughness: 0.5, metalness: 0.05, side: THREE.DoubleSide
       });
-      FishGLB.addBend(mat, {
-        bodyMask: new THREE.Vector3(0, 0, 1),
-        latMask: new THREE.Vector3(1, 0, 0),
-        range: geo.userData.range,
-        headAtMax: true
-      }, 0.4, Math.random() * 6.28);
+      // Виляние хвостом — только у «боковых» видов: бабочку и футболиста
+      // изгиб вдоль тела кривил бы без всякого смысла.
+      if (geo.userData.projection === 'side') {
+        FishGLB.addBend(mat, {
+          bodyMask: new THREE.Vector3(0, 0, 1),
+          latMask: new THREE.Vector3(1, 0, 0),
+          range: geo.userData.range,
+          headAtMax: true
+        }, 0.4, Math.random() * 6.28);
+      }
       P3.mesh = new THREE.Mesh(geo, mat);
       P3.scene.add(P3.mesh);
+      applySize();
       spin.style.display = 'none';
       startLoop();
     });
@@ -373,8 +464,17 @@
       var t = (now - t0) / 1000;
       FishGLB.uTime.value = t;
       if (P3.mesh) {
-        // боком к зрителю, с лёгким поворотом туда-сюда
-        P3.mesh.rotation.y = Math.PI / 2 + Math.sin(t * 0.5) * 0.55;
+        // Показываем той стороной, которую раскрашивали: рыбу — боком,
+        // насекомое — сверху, футболиста — лицом. Плюс лёгкое покачивание.
+        var proj = P3.mesh.geometry.userData.projection || 'side';
+        if (proj === 'top') {
+          P3.mesh.rotation.set(-1.15, 0, 0);
+          P3.mesh.rotation.z = Math.sin(t * 0.5) * 0.35;
+        } else if (proj === 'front') {
+          P3.mesh.rotation.set(0, Math.sin(t * 0.5) * 0.4, 0);
+        } else {
+          P3.mesh.rotation.set(0, Math.PI / 2 + Math.sin(t * 0.5) * 0.55, 0);
+        }
         P3.mesh.position.y = Math.sin(t * 0.9) * 0.07;
       }
       P3.renderer.render(P3.scene, P3.camera);
@@ -412,20 +512,61 @@
   window.handlePhoto = function (source) {   // отдельно — для автотестов
     show('s-busy');
     return FishCapture.processPhoto(source, manifest).then(function (r) {
+      // Лист другого мира распознаётся честно, но не оживает: бабочке нечего
+      // делать в аквариуме. Говорим об этом прямо, а не «метки не найдены».
+      var info = null;
+      manifest.fish.forEach(function (f) { if (f.name === r.kind) info = f; });
+      if (info && (info.world || 'aquarium') !== WORLD) {
+        throw new Error(I18N.t('cap.err.wrongWorld'));
+      }
       result = r;
       document.getElementById('p-name').textContent =
         I18N.t('cap.itis', { name: (r.titles && (r.titles[I18N.lang] || r.titles.ru)) || r.title });
       // ползунок стартует с авто-положения: бледный рисунок уже подкручен
       document.getElementById('boost').value = Math.round(r.boost.auto * 100);
+      document.getElementById('boost-row').hidden = false;
+      // размер каждой новой рыбки — обычный, ползунок в середину
+      document.getElementById('size').value = 100;
+      showTeamRow();
       show('s-preview');
       show3D(r.kind);
       return r;
-    }, function (err) {
+    }).catch(function (err) {
+      // catch, а не второй аргумент then: ошибка «лист из другого мира»
+      // бросается уже после распознавания, внутри успешной ветки.
       document.getElementById('err-text').textContent = String(err.message || err);
       show('s-error');
       throw err;
     });
   };
+
+  // ── команда (футбол) ─────────────────────────────────────────────────────
+  var TEAM_KEY = 'aqua.team';
+  var team = 'red';
+  try { if (localStorage.getItem(TEAM_KEY) === 'blue') team = 'blue'; } catch (e) { /* приватный режим */ }
+
+  function renderTeam() {
+    document.getElementById('team-red').setAttribute('aria-pressed', String(team === 'red'));
+    document.getElementById('team-blue').setAttribute('aria-pressed', String(team === 'blue'));
+  }
+
+  function showTeamRow() {
+    var on = WORLD === 'football';
+    document.getElementById('teamrow').hidden = !on;
+    document.getElementById('team-label').hidden = !on;
+    if (on) renderTeam();
+  }
+
+  ['red', 'blue'].forEach(function (t) {
+    document.getElementById('team-' + t).addEventListener('click', function () {
+      if (team === t) return;
+      team = t;
+      try { localStorage.setItem(TEAM_KEY, team); } catch (e) { /* приватный режим */ }
+      renderTeam();
+      // Игрок «из фото»: форма в цветах команды, перерисовываем на месте.
+      if (result && result.faceMode) refreshFaceTexture();
+    });
+  });
 
   // Живая подстройка: пиксели пересчитываются из сырой копии, 3D-текстура
   // обновляется через needsUpdate. Во время протяжки события схлопывает
@@ -449,6 +590,13 @@
   });
   boostEl.addEventListener('change', applyBoost);
 
+  // «Размер рыбки»: множитель длины в аквариуме, в превью масштабируется
+  // сама модель — насколько рыбка вырастет, видно сразу.
+  var sizeEl = document.getElementById('size');
+  function sizeValue() { return sizeEl.value / 100; }
+  function applySize() { if (P3.mesh) P3.mesh.scale.setScalar(sizeValue()); }
+  sizeEl.addEventListener('input', applySize);
+
   document.getElementById('file').addEventListener('change', function () {
     var file = this.files && this.files[0];
     this.value = '';
@@ -461,19 +609,26 @@
   });
 
   window.releaseFish = function () {         // отдельно — для автотестов
-    if (!result) return Promise.reject(new Error(I18N.t('cap.err.nofish')));
+    if (!result) return Promise.reject(new Error(I18N.t(wtKey('cap.err.nofish'))));
     applyBoost();   // страховка: rAF мог не успеть — уходит то, что на ползунке
-    document.getElementById('busy-text').textContent = I18N.t('cap.sending');
+    document.getElementById('busy-text').textContent = I18N.t(wtKey('cap.sending'));
     show('s-busy');
+    // текстура запекается с текущим положением ползунка — в аквариум
+    // уплывает то, что человек видел на превью
+    var body = {
+      kind: result.kind,
+      size: sizeValue(),
+      texture: result.boost ? result.boost.bake().texture
+        : result.texCanvas ? result.texCanvas.toDataURL('image/png')
+        : result.texture
+    };
+    // Футбол: команда игрока и признак «текстура — фото лица».
+    if (WORLD === 'football') body.team = team;
+    if (result.faceMode) body.face = true;
     return fetch(Tank.api + '/fish', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      // текстура запекается с текущим положением ползунка — в аквариум
-      // уплывает то, что человек видел на превью
-      body: JSON.stringify({
-        kind: result.kind,
-        texture: result.boost ? result.boost.bake().texture : result.texture
-      })
+      body: JSON.stringify(body)
     }).then(function (r) {
       if (!r.ok) throw new Error(I18N.t('cap.err.status', { code: r.status }));
       return r.json();
@@ -489,6 +644,209 @@
   };
 
   document.getElementById('b-release').addEventListener('click', function () { window.releaseFish(); });
+
+  // ── игрок из фото лица (футбол) ──────────────────────────────────────────
+  // Без распознавания: ребёнок сам двигает и приближает фото под овалом,
+  // как в аватарках. Дальше лицо ложится на стандартную форму команды.
+  var FACE = { bmp: null, x: 0, y: 0, zoom: 1.3, drag: null };
+  var faceCv = document.getElementById('face-canvas');
+  var FACE_W = 640, OVAL = { cx: 320, cy: 320, rx: 200, ry: 258 };
+
+  function faceBaseScale() {
+    return Math.max(FACE_W / FACE.bmp.width, FACE_W / FACE.bmp.height);
+  }
+
+  function drawFace() {
+    if (!FACE.bmp) return;
+    var ctx = faceCv.getContext('2d');
+    var s = faceBaseScale() * FACE.zoom;
+    var w = FACE.bmp.width * s, h = FACE.bmp.height * s;
+    // фото не должно уезжать за края: овал всегда заполнен
+    FACE.x = Math.min((w - FACE_W) / 2, Math.max(-(w - FACE_W) / 2, FACE.x));
+    FACE.y = Math.min((h - FACE_W) / 2, Math.max(-(h - FACE_W) / 2, FACE.y));
+    ctx.clearRect(0, 0, FACE_W, FACE_W);
+    ctx.drawImage(FACE.bmp, (FACE_W - w) / 2 + FACE.x, (FACE_W - h) / 2 + FACE.y, w, h);
+    // затемняем всё вне овала, сам овал обводим
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, 0, FACE_W, FACE_W);
+    ctx.ellipse(OVAL.cx, OVAL.cy, OVAL.rx, OVAL.ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(2, 12, 22, 0.62)';
+    ctx.fill('evenodd');
+    ctx.restore();
+    ctx.beginPath();
+    ctx.ellipse(OVAL.cx, OVAL.cy, OVAL.rx, OVAL.ry, 0, 0, Math.PI * 2);
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(88, 214, 255, 0.9)';
+    ctx.stroke();
+  }
+
+  // Овал лица без затемнения — то, что поедет на форму игрока.
+  function faceOvalCanvas() {
+    var c = document.createElement('canvas');
+    c.width = OVAL.rx * 2; c.height = OVAL.ry * 2;
+    var ctx = c.getContext('2d');
+    ctx.beginPath();
+    ctx.ellipse(OVAL.rx, OVAL.ry, OVAL.rx, OVAL.ry, 0, 0, Math.PI * 2);
+    ctx.clip();
+    var s = faceBaseScale() * FACE.zoom;
+    var w = FACE.bmp.width * s, h = FACE.bmp.height * s;
+    ctx.drawImage(FACE.bmp,
+      (FACE_W - w) / 2 + FACE.x - (OVAL.cx - OVAL.rx),
+      (FACE_W - h) / 2 + FACE.y - (OVAL.cy - OVAL.ry), w, h);
+    return c;
+  }
+
+  faceCv.addEventListener('pointerdown', function (e) {
+    faceCv.setPointerCapture(e.pointerId);
+    FACE.drag = { x: e.clientX, y: e.clientY };
+  });
+  faceCv.addEventListener('pointermove', function (e) {
+    if (!FACE.drag || !FACE.bmp) return;
+    // канвас растянут CSS-ом: переводим пиксели экрана в пиксели канваса
+    var k = FACE_W / faceCv.clientWidth;
+    FACE.x += (e.clientX - FACE.drag.x) * k;
+    FACE.y += (e.clientY - FACE.drag.y) * k;
+    FACE.drag = { x: e.clientX, y: e.clientY };
+    drawFace();
+  });
+  faceCv.addEventListener('pointerup', function () { FACE.drag = null; });
+  faceCv.addEventListener('pointercancel', function () { FACE.drag = null; });
+
+  document.getElementById('face-zoom').addEventListener('input', function () {
+    FACE.zoom = this.value / 100;
+    drawFace();
+  });
+
+  document.getElementById('face-file').addEventListener('change', function () {
+    var file = this.files && this.files[0];
+    this.value = '';
+    if (!file) return;
+    loadBitmap(file).then(function (bmp) {
+      FACE.bmp = bmp;
+      FACE.x = 0; FACE.y = 0; FACE.zoom = 1.3;
+      document.getElementById('face-zoom').value = 130;
+      show('s-face');
+      drawFace();
+    }, function () {
+      document.getElementById('err-text').textContent = I18N.t('cap.err.photo');
+      show('s-error');
+    });
+  });
+
+  function footballerInfo() {
+    var info = null;
+    ((manifest && manifest.fish) || []).forEach(function (f) {
+      if ((f.world || 'aquarium') === 'football' && (f.projection || 'side') === 'front') info = f;
+    });
+    return info;
+  }
+
+  // Форма рисуется по рамке кропа листа (bboxModel + sheetTransform), поэтому
+  // ложится на модель той же планарной UV, что и раскрашенный лист.
+  var KIT = { red: '#c9403f', blue: '#2f6fc4' };
+  var KIT_ZONES = {
+    head: [0, 0.165],        // доли высоты текстуры сверху вниз
+    shirt: [0.165, 0.54],
+    shorts: [0.54, 0.70],
+    socks: [0.70, 0.94],
+    shoes: [0.94, 1]
+  };
+
+  function composePlayer(info, teamColor, face) {
+    var TEX_W = 1024;
+    var st = info.sheetTransform;
+    var bz = info.bboxModel.z, by = info.bboxModel.y;
+    var cropMM = {
+      x0: st.ox + st.scale * bz[0], x1: st.ox + st.scale * bz[1],
+      y0: st.oy - st.scale * by[1], y1: st.oy - st.scale * by[0]
+    };
+    var cropW = cropMM.x1 - cropMM.x0, cropH = cropMM.y1 - cropMM.y0;
+    var TH = Math.round(TEX_W * cropH / cropW);
+    var c = document.createElement('canvas');
+    c.width = TEX_W; c.height = TH;
+    var ctx = c.getContext('2d');
+
+    var toTex = function (p) {
+      return [
+        (st.ox + st.scale * p[0] - cropMM.x0) / cropW * TEX_W,
+        (st.oy - st.scale * p[1] - cropMM.y0) / cropH * TH
+      ];
+    };
+
+    ctx.beginPath();
+    info.contourModel.forEach(function (p, i) {
+      var q = toTex(p);
+      if (i === 0) ctx.moveTo(q[0], q[1]); else ctx.lineTo(q[0], q[1]);
+    });
+    ctx.closePath();
+    ctx.save();
+    ctx.clip();
+
+    var band = function (zone, color) {
+      ctx.fillStyle = color;
+      ctx.fillRect(0, zone[0] * TH, TEX_W, (zone[1] - zone[0]) * TH);
+    };
+    band([0, 1], '#f2c99f');                    // кожа — базовый слой
+    band(KIT_ZONES.shirt, teamColor);
+    band(KIT_ZONES.shorts, '#f2f2f2');
+    band(KIT_ZONES.socks, teamColor);
+    band(KIT_ZONES.shoes, '#2b2b2b');
+    // тонкая полоска на груди, чтобы форма не была одноцветным пятном
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.fillRect(0, (KIT_ZONES.shirt[0] + 0.05) * TH, TEX_W, 0.018 * TH);
+
+    // лицо ребёнка — овалом в зоне головы, по центру
+    var headH = (KIT_ZONES.head[1] - KIT_ZONES.head[0]) * TH;
+    var fr = { ry: headH * 0.46 };
+    fr.rx = fr.ry * (OVAL.rx / OVAL.ry);
+    var fcx = toTex([0, 0])[0];
+    var fcy = KIT_ZONES.head[0] * TH + headH * 0.52;
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(fcx, fcy, fr.rx, fr.ry, 0, 0, Math.PI * 2);
+    ctx.clip();
+    ctx.drawImage(face, fcx - fr.rx, fcy - fr.ry, fr.rx * 2, fr.ry * 2);
+    ctx.restore();
+
+    ctx.restore();
+    return c;
+  }
+
+  function refreshFaceTexture() {
+    if (!result || !result.faceMode || !FACE.bmp) return;
+    var src = composePlayer(result.info, KIT[team], faceOvalCanvas());
+    result.texCanvas.getContext('2d').drawImage(src, 0, 0);
+    if (P3.mesh && P3.mesh.material.map) P3.mesh.material.map.needsUpdate = true;
+    var flat = document.getElementById('p-img');
+    if (!flat.hidden) flat.src = result.texCanvas.toDataURL('image/png');
+  }
+
+  document.getElementById('b-face-use').addEventListener('click', function () {
+    var info = footballerInfo();
+    if (!info || !FACE.bmp) {
+      document.getElementById('err-text').textContent = I18N.t('cap.err.manifest');
+      show('s-error');
+      return;
+    }
+    var texCanvas = composePlayer(info, KIT[team], faceOvalCanvas());
+    result = {
+      kind: info.name,
+      faceMode: true,
+      info: info,
+      titles: info.titles,
+      title: info.title,
+      texCanvas: texCanvas,
+      preview: texCanvas.toDataURL('image/png')
+    };
+    document.getElementById('p-name').textContent =
+      I18N.t('cap.itis', { name: (info.titles && (info.titles[I18N.lang] || info.titles.ru)) || info.title });
+    document.getElementById('boost-row').hidden = true;   // яркость — про фломастеры
+    document.getElementById('size').value = 100;
+    showTeamRow();
+    show('s-preview');
+    show3D(info.name);
+  });
 })();
 </script>
 </body>

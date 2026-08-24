@@ -38,7 +38,24 @@
   }
   @keyframes drift { from { transform: translateX(-30px); } to { transform: translateX(30px); } }
 
-  .wrap { max-width: 980px; margin: 0 auto; padding: 64px 24px 80px; position: relative; }
+  .wrap { max-width: 980px; margin: 0 auto; padding: 48px 24px 80px; position: relative; }
+
+  /* Переключатель миров — самый верх страницы: он решает, что именно
+     создастся по «+» и про какой мир рассказывает инструкция ниже. */
+  .worlds { display: flex; gap: 10px; margin: 0 0 28px; flex-wrap: wrap; }
+  .worlds button {
+    appearance: none; cursor: pointer; font: inherit; font-size: 15px;
+    display: flex; align-items: center; gap: 9px; padding: 10px 18px;
+    border: 1px solid var(--line); border-radius: 12px;
+    background: var(--card); color: var(--muted);
+    transition: color .15s, background .15s, border-color .15s, transform .15s;
+  }
+  .worlds button:hover { color: var(--ink); transform: translateY(-1px); }
+  .worlds button .wico { font-size: 20px; line-height: 1; }
+  .worlds button[aria-pressed="true"] {
+    color: var(--ink); border-color: rgba(88, 214, 255, .55);
+    background: rgba(88, 214, 255, .12);
+  }
 
   .head {
     display: flex; align-items: flex-start; gap: 24px; flex-wrap: wrap;
@@ -211,10 +228,16 @@
 <body>
 <div class="wrap">
 
+  <!-- Кнопки рисует скрипт: миры описаны одним списком WORLDS вместе
+       со значками карточек и шагов инструкции. -->
+  <div class="worlds" id="worlds" role="group"></div>
+
   <div class="head">
     <header>
-      <h1 data-t="home.title">Мои аквариумы</h1>
-      <p data-t="home.lead"></p>
+      <h1 data-t="home.title">Мои миры</h1>
+      <!-- Подводка зависит от выбранного мира, поэтому без data-t:
+           текст ставит applyWorld(), и он же слушает смену языка. -->
+      <p id="lead"></p>
     </header>
 
     <!-- Ввод кода стоит рядом с заголовком: с пином это первое действие
@@ -238,8 +261,10 @@
     <div class="howbody">
       <!-- Большой экран — вторым шагом: сначала настроить сцену, а потом
            творить, и рыбка появится на телевизоре прямо на глазах. -->
+      <!-- Первый шаг зависит от мира (значок и текст ставит applyWorld),
+           остальные четыре общие для всех миров. -->
       <ol class="hsteps">
-        <li><span class="ico">🌊</span><span data-t="home.how.s0"></span></li>
+        <li><span class="ico" id="step0-ico">🌊</span><span id="step0-text"></span></li>
         <li><span class="ico">📺</span><span data-t="home.how.s4"></span></li>
         <li><span class="ico">🖨️</span><span data-t="home.how.s1"></span></li>
         <li><span class="ico">🖍️</span><span data-t="home.how.s2"></span></li>
@@ -277,21 +302,94 @@
   var box = document.getElementById('tanks');
   var empty = document.getElementById('empty');
 
+  // ── миры ──
+  // Выбранный мир решает, что создаст «+», и про какой мир инструкция.
+  // Карточки ниже показывают все пространства сразу, независимо от вкладки.
+  var WORLD_KEY = 'aqua.world';
+  var WORLDS = [
+    { key: 'aquarium', ico: '🐠', step0: '🌊', empty: '🫧' },
+    { key: 'garden',   ico: '🦋', step0: '🌱', empty: '🌼' },
+    { key: 'football', ico: '⚽', step0: '⚽', empty: '🥅' }
+  ];
+  var COUNTERS = { aquarium: 'fish', garden: 'insects', football: 'players' };
+  var world = 'aquarium';
+  try {
+    var savedWorld = localStorage.getItem(WORLD_KEY);
+    if (WORLDS.some(function (w) { return w.key === savedWorld; })) world = savedWorld;
+  } catch (e) { /* приватный режим */ }
+
+  function worldMeta(key) {
+    for (var i = 0; i < WORLDS.length; i++) if (WORLDS[i].key === key) return WORLDS[i];
+    return WORLDS[0];
+  }
+
+  // Перевод с оглядкой на мир: сначала «ключ.мир», нет такого — базовый ключ
+  // (он же аквариумный: у аквариума суффиксов в словаре нет).
+  function wtFor(w, key, vars) {
+    if (w && w !== 'aquarium') {
+      var k2 = key + '.' + w;
+      if (I18N.t(k2) !== k2) return I18N.t(k2, vars);
+    }
+    return I18N.t(key, vars);
+  }
+  function wt(key, vars) { return wtFor(world, key, vars); }
+
+  function drawWorlds() {
+    var host = document.getElementById('worlds');
+    host.textContent = '';
+    WORLDS.forEach(function (w) {
+      var b = document.createElement('button');
+      b.type = 'button';
+      b.setAttribute('aria-pressed', String(w.key === world));
+      var ico = document.createElement('span');
+      ico.className = 'wico';
+      ico.textContent = w.ico;
+      var label = document.createElement('span');
+      label.textContent = I18N.t('world.' + w.key);
+      b.appendChild(ico);
+      b.appendChild(label);
+      b.onclick = function () {
+        if (world === w.key) return;
+        world = w.key;
+        try { localStorage.setItem(WORLD_KEY, world); } catch (e) { /* приватный режим */ }
+        drawWorlds();
+        applyWorld();
+        render();          // подпись на плитке «+» тоже зависит от мира
+      };
+      host.appendChild(b);
+    });
+  }
+
+  function applyWorld() {
+    var w = worldMeta(world);
+    document.getElementById('lead').textContent = wt('home.lead');
+    document.getElementById('step0-ico').textContent = w.step0;
+    document.getElementById('step0-text').textContent = wt('home.how.s0');
+    // Витрина — живой аквариум; на вкладках других миров она сбивала бы с толку.
+    document.getElementById('demo').hidden = world !== 'aquarium' || !demoReady;
+  }
+
   I18N.mount(document.getElementById('lang'));
   document.title = I18N.t('home.title');
-  // Смена языка перерисовывает карточки: в них счётчик рыбок и подписи.
-  addEventListener('aqua:lang', function () { document.title = I18N.t('home.title'); render(); });
+  // Смена языка перерисовывает карточки: в них счётчик обитателей и подписи.
+  addEventListener('aqua:lang', function () {
+    document.title = I18N.t('home.title');
+    drawWorlds();
+    applyWorld();
+    render();
+  });
 
   // Карточка целиком — ссылка в аквариум. Отдельных кнопок нет: «Открыть»
   // дублировало нажатие на саму карточку, а управление живёт в меню
   // аквариума, рядом с тем, чем управляют.
   function card(meta) {
+    var w = worldMeta(meta.world);
     var el = document.createElement('a');
     el.className = 'tank';
     el.href = '/t/' + meta.id;
     el.innerHTML =
       '<div class="shot">' +
-        '<div class="none"><span class="big">🫧</span><span>' + I18N.t('home.card.empty') + '</span></div>' +
+        '<div class="none"><span class="big"></span><span>' + I18N.t('home.card.empty') + '</span></div>' +
         '<div class="veil"></div>' +
         '<button class="kill" title="' + I18N.t('home.card.kill') + '">✕</button>' +
       '</div>' +
@@ -300,9 +398,12 @@
         '<div class="meta"></div>' +
       '</div>';
 
+    el.querySelector('.none .big').textContent = w.empty;
     el.querySelector('h2').textContent = meta.name;
     var m = el.querySelector('.meta');
-    m.textContent = fishWord(meta.fishCount) + ' · ';
+    // Значок мира — прямо в строке под именем: карточки всех миров
+    // лежат в одном списке, и без него их не отличить до открытия.
+    m.textContent = w.ico + ' ' + countWord(meta) + ' · ';
     var code = document.createElement('code');
     code.textContent = meta.id;
     m.appendChild(code);
@@ -334,16 +435,16 @@
       // аквариум оставался в списке навсегда.
       Modal.choose({
         title: I18N.t('home.remove.title', { name: meta.name }),
-        text: I18N.t('home.remove.text', {
+        text: wtFor(meta.world, 'home.remove.text', {
           code: meta.id,
-          what: meta.fishCount ? fishWord(meta.fishCount) : I18N.t('home.remove.whatEmpty')
+          what: meta.fishCount ? countWord(meta) : wtFor(meta.world, 'home.remove.whatEmpty')
         }),
         image: pic,
         caption: meta.name,
         buttons: [
           { label: I18N.t('home.remove.cancel'), value: null },
           { label: I18N.t('home.remove.forget'), value: 'forget' },
-          { label: I18N.t('home.remove.delete'), value: 'delete', kind: 'danger' }
+          { label: wtFor(meta.world, 'home.remove.delete'), value: 'delete', kind: 'danger' }
         ]
       }).then(function (what) {
         if (!what) return;
@@ -359,7 +460,7 @@
           if (r.status !== 401 && r.status !== 429) return false;
           return Tank.askPass(meta.id, {
             title: I18N.t('home.remove.pass.title', { name: meta.name }),
-            text: I18N.t('home.remove.pass.text')
+            text: wtFor(meta.world, 'home.remove.pass.text')
           }).then(function (got) {
             return got ? kill().then(function (r2) { return r2.ok; }) : false;
           });
@@ -370,19 +471,24 @@
     return el;
   }
 
-  function fishWord(n) {
-    return n ? I18N.plural(n, 'fish') : I18N.t('home.card.empty');
+  // Счётчик обитателей: в аквариуме рыбки, в саду насекомые, на поле игроки.
+  function countWord(meta) {
+    var n = meta.fishCount;
+    return n ? I18N.plural(n, COUNTERS[meta.world] || 'fish') : I18N.t('home.card.empty');
   }
 
   function newTankTile() {
     var b = document.createElement('button');
     b.className = 'newtank';
-    b.innerHTML = '<span class="plus">+</span><span>' + I18N.t('home.new') + '</span>';
+    b.innerHTML = '<span class="plus">+</span><span>' + wt('home.new') + '</span>';
     b.onclick = function () {
+      // Мир фиксируем в момент клика: пока открыт диалог имени, вкладку
+      // могли переключить, а создать должны то, на что нажимали.
+      var w = world;
       Modal.prompt({
-        title: I18N.t('home.create.title'),
+        title: wtFor(w, 'home.create.title'),
         text: I18N.t('home.create.text'),
-        value: I18N.t('home.create.value'),
+        value: wtFor(w, 'home.create.value'),
         maxLength: 60,
         confirmLabel: I18N.t('home.create.ok')
       }).then(function (name) {
@@ -391,7 +497,7 @@
         return fetch('/api/tanks', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name: name })
+          body: JSON.stringify({ name: name, world: w })
         })
           .then(function (r) { return r.json(); })
           .then(function (meta) {
@@ -401,13 +507,13 @@
             // а вот на телефоне или у второго родителя без него не обойтись.
             Tank.setPass(meta.id, meta.password);
             return Modal.alert({
-              title: I18N.t('home.created.title'),
-              text: I18N.t('home.created.text'),
+              title: wtFor(w, 'home.created.title'),
+              text: wtFor(w, 'home.created.text'),
               fields: [
-                { label: I18N.t('home.created.code'), value: meta.id },
+                { label: wtFor(w, 'home.created.code'), value: meta.id },
                 { label: I18N.t('home.created.pass'), value: meta.password }
               ],
-              okLabel: I18N.t('home.created.ok')
+              okLabel: wtFor(w, 'home.created.ok')
             }).then(function () { location.href = '/t/' + meta.id; });
           })
           .catch(function () {
@@ -427,6 +533,7 @@
   // хоть что-то завёл. Ссылка с ?demo — чтобы витрина не прописалась
   // в списке своих.
   var demoAsked = false;
+  var demoReady = false;
   var howTouched = false;
   var HOW_KEY = 'aqua.howOpen';
 
@@ -467,7 +574,8 @@
               var shot = a.querySelector('.shot');
               shot.insertBefore(img, shot.firstChild);
             }
-            a.hidden = false;
+            demoReady = true;
+            a.hidden = world !== 'aquarium';
           });
       })
       .catch(function () { /* демо не настроено — блок живёт без карточки */ });
@@ -541,6 +649,8 @@
     location.href = '/t/' + v;
   };
 
+  drawWorlds();
+  applyWorld();
   render();
 })();
 </script>

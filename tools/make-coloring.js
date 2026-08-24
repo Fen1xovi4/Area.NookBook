@@ -40,10 +40,25 @@ const STROKE = 1.6;        // мм
 const STROKE_COLOR = '#8a8a8a';
 
 // ── виды ────────────────────────────────────────────────────────────────────
-// name — папка в assets/models/pack, titles — что видит ребёнок, на трёх
-// языках сайта (лист печатается на том, который выбран),
-// len — длина рыбки в аквариуме (метры сцены),
+// name — ключ вида (он же в tools/contours.json), titles — что видит ребёнок,
+// на трёх языках сайта (лист печатается на том, который выбран),
+// len — длина в сцене (метры),
 // eye — [z, y] в долях длины тела; null = посчитать автоматически.
+//
+// Необязательные поля (по умолчанию — аквариумная рыба из пака):
+//   world      — 'aquarium' | 'garden' | 'football': в каком мире живёт вид
+//   projection — 'side' | 'top' | 'front': какой стороной вид лежит на листе;
+//                та же пара осей у tools/silhouettes.html и PaintedUV
+//   model      — URL модели; без него берётся /assets/models/pack/<name>/…
+//   frame      — 'identity', если модель нормализована при конвертации
+//                (нос → +Z, спина → +Y) и эвристику осей надо пропустить
+//
+// ┌──────────────────────────────────────────────────────────────────────────┐
+// │ ТОЛЬКО ДОБАВЛЯТЬ В КОНЕЦ. Вставка, перестановка или удаление вида        │
+// │ сдвигает коды угловых меток всех видов после него — и все уже            │
+// │ напечатанные листы перестают распознаваться. Страхует tools/             │
+// │ codes.lock.json: при сдвиге генератор откажется работать.                │
+// └──────────────────────────────────────────────────────────────────────────┘
 const LANGS = ['ru', 'en', 'pl'];
 
 const SPECIES = [
@@ -70,7 +85,45 @@ const SPECIES = [
   { name: 'bluecheekbutterflyfish', len: 1.5, eye: null,
     titles: { ru: 'Рыба-бабочка',      en: 'Butterflyfish',            pl: 'Motylek' } },
   { name: 'discus1',                len: 1.8, eye: null,
-    titles: { ru: 'Дискус',            en: 'Discus',                   pl: 'Paletka' } }
+    titles: { ru: 'Дискус',            en: 'Discus',                   pl: 'Paletka' } },
+  { name: 'shark',           len: 2.6, eye: null,
+    titles: { ru: 'Акула',            en: 'Shark',           pl: 'Rekin' } },
+  { name: 'mantaray',        len: 2.6, eye: null,
+    titles: { ru: 'Скат манта',       en: 'Manta ray',       pl: 'Manta' } },
+  { name: 'dolphin',         len: 2.5, eye: null,
+    titles: { ru: 'Дельфин',          en: 'Dolphin',         pl: 'Delfin' } },
+
+  // ── сад (мир garden): насекомые, лист — вид сверху ──
+  { name: 'butterflymonarch', len: 1.7, eye: null,
+    world: 'garden', projection: 'top', frame: 'identity',
+    model: '/assets/models/garden/butterflymonarch/butterflymonarch.gltf',
+    titles: { ru: 'Бабочка-монарх',    en: 'Monarch butterfly', pl: 'Monarcha' } },
+  { name: 'butterflymorpho',  len: 1.6, eye: null,
+    world: 'garden', projection: 'top', frame: 'identity',
+    model: '/assets/models/garden/butterflymorpho/butterflymorpho.gltf',
+    titles: { ru: 'Бабочка-морфо',     en: 'Morpho butterfly',  pl: 'Morfo' } },
+  { name: 'butterflyorange',  len: 1.5, eye: null,
+    world: 'garden', projection: 'top', frame: 'identity',
+    model: '/assets/models/garden/butterflyorange/butterflyorange.gltf',
+    titles: { ru: 'Оранжевая бабочка', en: 'Orange butterfly',  pl: 'Pomarańczowy motyl' } },
+  { name: 'ladybug',          len: 1.1, eye: null,
+    world: 'garden', projection: 'top', frame: 'identity',
+    model: '/assets/models/garden/ladybug/ladybug.gltf',
+    titles: { ru: 'Божья коровка',     en: 'Ladybug',           pl: 'Biedronka' } },
+  { name: 'bee',              len: 1.2, eye: null,
+    world: 'garden', projection: 'top', frame: 'identity',
+    model: '/assets/models/garden/bee/bee.gltf',
+    titles: { ru: 'Шмель',             en: 'Bumblebee',         pl: 'Trzmiel' } },
+  { name: 'dragonfly',        len: 1.8, eye: null,
+    world: 'garden', projection: 'top', frame: 'identity',
+    model: '/assets/models/garden/dragonfly/dragonfly.gltf',
+    titles: { ru: 'Стрекоза',          en: 'Dragonfly',         pl: 'Ważka' } },
+
+  // ── футбол (мир football): лист — вид спереди, len — рост ──
+  { name: 'footballer',       len: 1.9, eye: null,
+    world: 'football', projection: 'front', frame: 'identity', lengthAxis: 'y',
+    model: '/assets/models/football/footballer/footballer.gltf',
+    titles: { ru: 'Футболист',         en: 'Footballer',        pl: 'Piłkarz' } }
 ];
 
 // Имя файла листа: русский лежит по старому адресу, остальные рядом с ним.
@@ -141,6 +194,32 @@ function greedy(pool, count, dist) {
     if (chosen.length === count) return chosen;
   }
   return null;
+}
+
+// ── замок кодов ─────────────────────────────────────────────────────────────
+// Снимок уже розданных кодов. pickCodes детерминирован и выдаёт префикс:
+// добавление видов В КОНЕЦ не трогает прежние коды, а вот вставка или
+// перестановка сдвигает всё после себя — и напечатанные листы умирают.
+// Замок ловит такой сдвиг до того, как листы уйдут в печать.
+const LOCK = path.join(__dirname, 'codes.lock.json');
+
+function checkLock(codes) {
+  let locked = [];
+  try { locked = JSON.parse(fs.readFileSync(LOCK, 'utf8')); } catch (e) { /* замка ещё нет */ }
+  if (codes.length < locked.length) {
+    console.error('видов стало меньше, чем в codes.lock.json (' + codes.length / 4 + ' < ' +
+      locked.length / 4 + '). Виды из SPECIES не удаляют — их листы уже напечатаны.');
+    process.exit(1);
+  }
+  for (let i = 0; i < locked.length; i++) {
+    if (locked[i] !== codes[i]) {
+      console.error('КОДЫ СДВИНУЛИСЬ: позиция ' + i + ' (вид «' + SPECIES[Math.floor(i / 4)].name +
+        '») была ' + locked[i] + ', стала ' + codes[i] +
+        '. В SPECIES нельзя вставлять, переставлять и удалять виды — только добавлять в конец.');
+      process.exit(1);
+    }
+  }
+  if (codes.length > locked.length) fs.writeFileSync(LOCK, JSON.stringify(codes), 'utf8');
 }
 
 // Берём самый строгий разброс, при котором кодов ещё хватает. Порядок попыток
@@ -520,6 +599,7 @@ function main() {
 
   const picked = pickCodes(SPECIES.length * 4);
   const codes = picked.codes;
+  checkLock(codes);
   const fish = SPECIES.map((s, i) => {
     const c = contours[s.name];
     const f = {
@@ -529,7 +609,13 @@ function main() {
       // и старые ссылки на листы от этого не ломаются.
       title: s.titles.ru,
       titles: s.titles,
-      model: '/assets/models/pack/' + s.name + '/' + s.name + '.gltf',
+      world: s.world || 'aquarium',
+      projection: s.projection || 'side',
+      // frame и lengthAxis попадают в манифест только там, где заданы:
+      // JSON.stringify молча выбрасывает undefined.
+      frame: s.frame,
+      lengthAxis: s.lengthAxis,
+      model: s.model || '/assets/models/pack/' + s.name + '/' + s.name + '.gltf',
       svg: 'assets/coloring/' + sheetFile(s.name, 'ru'),
       sheets: LANGS.reduce((acc, lang) => {
         acc[lang] = 'assets/coloring/' + sheetFile(s.name, lang);
@@ -546,7 +632,8 @@ function main() {
       bboxModel: c.bbox
     };
     f.sheetTransform = sheetTransform(c.bbox);
-    f.eye = s.eye || eyeAt(c.contour, c.bbox);
+    // Глаз — подсказка для бокового силуэта рыбы; сверху и анфас он не нужен.
+    f.eye = s.eye || ((s.projection || 'side') === 'side' ? eyeAt(c.contour, c.bbox) : null);
     return f;
   });
 
@@ -587,7 +674,7 @@ function main() {
   fish.forEach((f) => console.log(
     '  ' + f.name.padEnd(24) + f.title.padEnd(20) +
     'масштаб ' + String(f.sheetTransform.scale).padEnd(9) +
-    'глаз ' + f.eye.join(', ')
+    'глаз ' + (f.eye ? f.eye.join(', ') : '—')
   ));
 }
 

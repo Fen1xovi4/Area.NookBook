@@ -83,6 +83,41 @@
     return new THREE.Quaternion().setFromRotationMatrix(basis).invert();
   }
 
+  function boundsOf(root, useWorld) {
+    var box = new THREE.Box3(), v = new THREE.Vector3();
+    root.traverse(function (o) {
+      if (!o.isMesh) return;
+      var p = o.geometry.attributes.position;
+      for (var i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i);
+        if (useWorld) v.applyMatrix4(o.matrixWorld);
+        box.expandByPoint(v);
+      }
+    });
+    return box;
+  }
+
+  // Модель нормализована ещё при конвертации: нос → +Z, спина → +Y.
+  // Эвристики осей таким только вредят — у бабочки размах крыльев длиннее
+  // тела, и габаритный разбор развернул бы её боком. spec.frame === 'identity'.
+  // lenAxis — по какой оси мерить spec.length: 'z' (длина тела, по умолчанию)
+  // или 'y' (рост — для гуманоидов).
+  function normalizeIdentity(root, targetLen, lenAxis) {
+    root.updateWorldMatrix(true, true);
+    var box = boundsOf(root, true);
+    var size = box.getSize(new THREE.Vector3());
+    var local = boundsOf(root, false);
+    root.position.sub(box.getCenter(new THREE.Vector3()));
+    return {
+      quat: new THREE.Quaternion(),
+      scale: targetLen / (size[lenAxis || 'z'] || 1),
+      bodyMask: maskVec('z'),
+      latMask: maskVec('x'),
+      range: [local.min.z, local.max.z],
+      headAtMax: true
+    };
+  }
+
   // skel — результат FishFrame.fromSkeleton (оси и голова по анимации) либо
   // null: тогда всё решают габариты.
   function normalizeFish(root, targetLen, skel) {
@@ -170,8 +205,10 @@
       loader.load(spec.url,
         function (gltf) {
           spec.gltf = gltf;
-          spec.info = normalizeFish(gltf.scene, spec.length,
-            typeof spec.headAtMax === 'boolean' ? { headAtMax: spec.headAtMax } : skelOf(gltf));
+          spec.info = spec.frame === 'identity'
+            ? normalizeIdentity(gltf.scene, spec.length, spec.lengthAxis)
+            : normalizeFish(gltf.scene, spec.length,
+                typeof spec.headAtMax === 'boolean' ? { headAtMax: spec.headAtMax } : skelOf(gltf));
           ok++;
           if (--left === 0) onDone(ok);
         },
@@ -226,14 +263,24 @@
   function bake(spec) {
     var root = spec.gltf.scene;
     root.updateWorldMatrix(true, true);
-    var skel = typeof spec.headAtMax === 'boolean' ? null : skelOf(spec.gltf);
-    var w = fishFrame(root, true, skel && skel.axes);
-    if (typeof spec.headAtMax === 'boolean') w.headAtMax = spec.headAtMax;
-    else if (skel && typeof skel.headAtMax === 'boolean') w.headAtMax = skel.headAtMax;
-    var s = spec.length / (w.size[w.body] || 1);
-    var M = new THREE.Matrix4().makeScale(s, s, s)
-      .multiply(new THREE.Matrix4().makeRotationFromQuaternion(frameQuat(w)))
-      .multiply(new THREE.Matrix4().makeTranslation(-w.center.x, -w.center.y, -w.center.z));
+    var M;
+    if (spec.frame === 'identity') {
+      var box = boundsOf(root, true);
+      var size = box.getSize(new THREE.Vector3());
+      var c = box.getCenter(new THREE.Vector3());
+      var si = spec.length / (size[spec.lengthAxis || 'z'] || 1);
+      M = new THREE.Matrix4().makeScale(si, si, si)
+        .multiply(new THREE.Matrix4().makeTranslation(-c.x, -c.y, -c.z));
+    } else {
+      var skel = typeof spec.headAtMax === 'boolean' ? null : skelOf(spec.gltf);
+      var w = fishFrame(root, true, skel && skel.axes);
+      if (typeof spec.headAtMax === 'boolean') w.headAtMax = spec.headAtMax;
+      else if (skel && typeof skel.headAtMax === 'boolean') w.headAtMax = skel.headAtMax;
+      var s = spec.length / (w.size[w.body] || 1);
+      M = new THREE.Matrix4().makeScale(s, s, s)
+        .multiply(new THREE.Matrix4().makeRotationFromQuaternion(frameQuat(w)))
+        .multiply(new THREE.Matrix4().makeTranslation(-w.center.x, -w.center.y, -w.center.z));
+    }
 
     var parts = [];
     root.traverse(function (o) {
@@ -241,6 +288,8 @@
       var g = o.geometry.clone();
       g.applyMatrix4(new THREE.Matrix4().multiplyMatrices(M, o.matrixWorld));
       if (g.index) g = g.toNonIndexed();
+      // Модели без нормалей (конвертация из OBJ) иначе рисуются чёрными.
+      if (!g.attributes.normal) g.computeVertexNormals();
 
       var count = g.attributes.position.count;
       var colors = new Float32Array(count * 3);
