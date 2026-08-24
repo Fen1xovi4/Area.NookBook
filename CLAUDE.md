@@ -70,7 +70,7 @@ ssh deploy@157.173.97.19 'cd /srv/apps/area-nookbook \
 - `--exclude=data` обязателен: в `data/` на сервере живые детские аквариумы, затирать нельзя.
   Бэкапить её — простым архивом этой папки.
 - `.env` на сервере: `DOMAIN=area.nookbook.pl` (+ лимиты AQUA_*). Не перезаписывать бездумно.
-- Проверка после деплоя: `curl -s https://area.nookbook.pl/api/pack` — должно вернуть 12 видов;
+- Проверка после деплоя: `curl -s https://area.nookbook.pl/api/pack` — должно вернуть 32 вида;
   `docker ps --filter name=aqua` — статус healthy.
 
 ## Пайплайн моделей (если добавляем/меняем виды)
