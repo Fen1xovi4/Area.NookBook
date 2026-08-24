@@ -55,7 +55,7 @@ Royalty Free — на своём сервере можно, редистрибу
 Git-remote у проекта нет — заливаем tar-ом по SSH из корня проекта:
 
 ```bash
-tar czf - --exclude=.git --exclude=data --exclude=server.log . \
+tar czf - --exclude=.git --exclude=data --exclude=server.log --exclude=.env . \
   | ssh deploy@157.173.97.19 'tar xzf - -C /srv/apps/area-nookbook'
 ssh deploy@157.173.97.19 'cd /srv/apps/area-nookbook \
   && cp -r assets/models/pack/* pack/ \
@@ -69,7 +69,8 @@ ssh deploy@157.173.97.19 'cd /srv/apps/area-nookbook \
   `assets/models/garden|football/`, едут с tar-ом и в `pack/` их копировать не нужно.
 - `--exclude=data` обязателен: в `data/` на сервере живые детские аквариумы, затирать нельзя.
   Бэкапить её — простым архивом этой папки.
-- `.env` на сервере: `DOMAIN=area.nookbook.pl` (+ лимиты AQUA_*). Не перезаписывать бездумно.
+- `.env` на сервере: `DOMAIN=area.nookbook.pl` (+ лимиты AQUA_*). `--exclude=.env`
+  в tar обязателен — иначе локальный `.env` затрёт серверный.
 - Проверка после деплоя: `curl -s https://area.nookbook.pl/api/pack` — должно вернуть 32 вида;
   `docker ps --filter name=aqua` — статус healthy.
 
