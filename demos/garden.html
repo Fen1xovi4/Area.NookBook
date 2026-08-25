@@ -153,7 +153,6 @@
     var self = this;
     clone.traverse(function (o) {
       if (!o.isMesh) return;
-      o.castShadow = true;    // тень на лугу привязывает бабочку к сцене
       o.material = addFlap(new THREE.MeshStandardMaterial({
         map: tex, roughness: 0.6, metalness: 0.05, side: THREE.DoubleSide
       }), tpl.span, kindP.flap[0], kindP.flap[1], self.phase);
@@ -214,339 +213,56 @@
   };
 
   // ── окружение ────────────────────────────────────────────────────────────
-  // Луг процедурный, но не «леденцовый»: холмистая земля с вершинными
-  // цветами, тысячи травинок инстансами с ветром в шейдере, ромашки и маки
-  // из лепестков-плоскостей, кусты и деревья спрайтами на горизонте, облака
-  // и солнце. Ни одного внешнего ассета — всё рисуют канвасы.
-  var clouds = [];
+  // Фон — картинка на scene.background, как в аквариуме: режим cover,
+  // насекомые летают перед ней. Фон выбирается в админке, встроенные лежат
+  // в assets/backgrounds/garden-*.jpg, приезжает он из настроек сервера.
+  var appliedBg;    // undefined = ещё не применяли
 
-  function canvasTex(w, h, draw) {
-    var c = document.createElement('canvas');
-    c.width = w; c.height = h;
-    draw(c.getContext('2d'), w, h);
-    var tex = new THREE.CanvasTexture(c);
-    tex.encoding = THREE.sRGBEncoding;
-    return tex;
-  }
-
-  function gradientTexture(stops) {
-    return canvasTex(4, 512, function (ctx) {
-      var g = ctx.createLinearGradient(0, 0, 0, 512);
-      stops.forEach(function (s) { g.addColorStop(s[0], s[1]); });
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, 4, 512);
-    });
-  }
-
-  // Высота луга: у камеры почти плоско (там садятся цветы и трава),
-  // к горизонту — пологие волны, перетекающие в холмы.
-  function groundHeight(x, z) {
-    var d = Math.max(0, -z - 6) / 34;
-    return Math.sin(x * 0.08 + 1.7) * Math.cos(z * 0.06) * (0.2 + 2.0 * d)
-         + Math.sin(x * 0.023) * Math.cos(z * 0.031 + 0.8) * (0.4 + 2.6 * d);
-  }
-
-  function buildGround() {
-    var geo = new THREE.PlaneGeometry(220, 120, 96, 52);
-    geo.rotateX(-Math.PI / 2);
-    var pos = geo.attributes.position;
-    var colors = new Float32Array(pos.count * 3);
-    // Голые цвета (без текстур) рендер считает линейными и пересветляет
-    // на sRGB-выводе — переводим руками, иначе луг белёсый.
-    var near = new THREE.Color(0x4e8a3d).convertSRGBToLinear();
-    var far = new THREE.Color(0x74ad57).convertSRGBToLinear();
-    var dry = new THREE.Color(0x9fae55).convertSRGBToLinear(), c = new THREE.Color();
-    for (var i = 0; i < pos.count; i++) {
-      var x = pos.getX(i), z = pos.getZ(i) - 22;   // -22 — сдвиг меша ниже
-      pos.setY(i, groundHeight(x, z));
-      // пятна: где-то трава светлее, где-то выгорела — сплошной цвет мёртв
-      var n = 0.5 + 0.5 * Math.sin(x * 0.31 + z * 0.17) * Math.cos(x * 0.11 - z * 0.23);
-      c.copy(near).lerp(far, n);
-      var d2 = 0.5 + 0.5 * Math.sin(x * 0.05 + 3.1) * Math.sin(z * 0.061);
-      if (d2 > 0.72) c.lerp(dry, (d2 - 0.72) * 1.8);
-      colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
+  function applyBackground(url) {
+    if (url === appliedBg) return;
+    appliedBg = url;
+    if (!url) {
+      scene.background = new THREE.Color(0x9cc9ea);
+      return;
     }
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    geo.computeVertexNormals();
-    var ground = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
-    ground.position.z = -22;
-    ground.receiveShadow = true;
-    scene.add(ground);
-  }
-
-  // ── трава: один InstancedMesh, ветер гнёт кончики в шейдере ──────────────
-  function grassTexture() {
-    return canvasTex(128, 128, function (ctx) {
-      for (var i = 0; i < 9; i++) {
-        var bx = 14 + i * 12 + (Math.random() - 0.5) * 8;
-        var tip = bx + (Math.random() - 0.5) * 46;
-        var w = 3.5 + Math.random() * 3;
-        var g = ctx.createLinearGradient(0, 128, 0, 8);
-        g.addColorStop(0, '#3a7230');
-        g.addColorStop(1, ['#7db956', '#98cc68', '#6fae4d'][i % 3]);
-        ctx.fillStyle = g;
-        ctx.beginPath();
-        ctx.moveTo(bx - w, 128);
-        ctx.quadraticCurveTo(bx - w * 0.4, 50, tip, 6 + Math.random() * 20);
-        ctx.quadraticCurveTo(bx + w * 0.4, 50, bx + w, 128);
-        ctx.closePath();
-        ctx.fill();
-      }
+    new THREE.TextureLoader().load(url, function (tex) {
+      if (appliedBg !== url) return;   // пока грузилась, выбрали другую
+      tex.encoding = THREE.sRGBEncoding;
+      scene.background = tex;
+      fitBackground();
+      WorldPage.wantShot(1);
     });
   }
 
-  function buildGrass() {
-    var COUNT = 3600;
-    var geo = new THREE.PlaneGeometry(0.55, 0.85);
-    geo.translate(0, 0.42, 0);
-    // alphaTest повыше: в дальних мипах альфа размазывается по всему квадрату,
-    // и с низким порогом трава на горизонте превращается в белые прямоугольники.
-    var mat = new THREE.MeshLambertMaterial({
-      map: grassTexture(), alphaTest: 0.55, side: THREE.DoubleSide
-    });
-    mat.onBeforeCompile = function (shader) {
-      shader.uniforms.uTime = uTime;
-      shader.vertexShader = 'uniform float uTime;\n' + shader.vertexShader.replace(
-        '#include <begin_vertex>', [
-          '#include <begin_vertex>',
-          'vec4 gw = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);',
-          'transformed.x += uv.y * uv.y * (sin(uTime * 1.4 + gw.x * 0.6 + gw.z * 0.8) * 0.11 + sin(uTime * 3.3 + gw.x * 1.7) * 0.05);'
-        ].join('\n'));
-    };
-    var mesh = new THREE.InstancedMesh(geo, mat, COUNT);
-    var m = new THREE.Matrix4(), q = new THREE.Quaternion();
-    var p = new THREE.Vector3(), s = new THREE.Vector3(), up = new THREE.Vector3(0, 1, 0);
-    var c = new THREE.Color(), base = new THREE.Color(0x74b558);
-    for (var i = 0; i < COUNT; i++) {
-      var z = 5.5 - 27 * Math.pow(Math.random(), 1.55);   // у камеры гуще, дальше луг рисует земля
-      var hw = Math.min(44, (15.5 - z) * 0.72 + 4);
-      var x = (Math.random() * 2 - 1) * hw;
-      p.set(x, groundHeight(x, z) - 0.04, z);
-      q.setFromAxisAngle(up, Math.random() * Math.PI);
-      var k = 0.7 + Math.random() * 0.9;
-      s.set(k, k * (0.75 + Math.random() * 0.6), k);
-      mesh.setMatrixAt(i, m.compose(p, q, s));
-      c.copy(base).offsetHSL((Math.random() - 0.5) * 0.04, (Math.random() - 0.5) * 0.2, Math.random() * 0.16 - 0.05);
-      mesh.setColorAt(i, c.convertSRGBToLinear());
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    scene.add(mesh);
-  }
-
-  // ── цветы: ромашки и маки из лепестков-плоскостей ────────────────────────
-  function petalTexture(inner, outer) {
-    return canvasTex(64, 64, function (ctx) {
-      var g = ctx.createLinearGradient(0, 64, 0, 0);
-      g.addColorStop(0, inner);
-      g.addColorStop(1, outer);
-      ctx.fillStyle = g;
-      ctx.beginPath();
-      ctx.ellipse(32, 32, 14, 30, 0, 0, Math.PI * 2);
-      ctx.fill();
-    });
-  }
-
-  var FLOWER_KINDS = [
-    { petals: 12, petal: ['#e8e2d4', '#ffffff'], core: 0xf2b13d, size: 0.30, cup: 0.22 }, // ромашка
-    { petals: 9,  petal: ['#d88fb4', '#f4c1d2'], core: 0xf2b13d, size: 0.28, cup: 0.3 },  // космея
-    { petals: 5,  petal: ['#a83430', '#d0453d'], core: 0x2c2020, size: 0.34, cup: 0.75 }, // мак
-    { petals: 8,  petal: ['#8f65b8', '#b98fd8'], core: 0xe8d24a, size: 0.26, cup: 0.35 }
-  ];
-
-  function makeFlower(kind) {
-    var g = new THREE.Group();
-    var stemH = 0.55 + Math.random() * 0.9;
-    var stemMat = new THREE.MeshLambertMaterial({ color: 0x3e7a33 });
-    stemMat.color.convertSRGBToLinear();
-    var stem = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.045, stemH, 5), stemMat);
-    stem.position.y = stemH / 2;
-    stem.rotation.z = (Math.random() - 0.5) * 0.15;
-    g.add(stem);
-
-    var head = new THREE.Group();
-    head.position.y = stemH;
-    head.rotation.set((Math.random() - 0.3) * 0.4, Math.random() * 6.3, 0);
-    var petalMat = new THREE.MeshLambertMaterial({
-      map: petalTexture(kind.petal[0], kind.petal[1]),
-      alphaTest: 0.5, side: THREE.DoubleSide
-    });
-    var petalGeo = new THREE.PlaneGeometry(kind.size * 0.55, kind.size);
-    petalGeo.translate(0, kind.size / 2, 0);
-    for (var i = 0; i < kind.petals; i++) {
-      var petal = new THREE.Mesh(petalGeo, petalMat);
-      var holder = new THREE.Group();
-      holder.rotation.y = i / kind.petals * Math.PI * 2;
-      petal.rotation.x = -Math.PI / 2 + kind.cup;  // лепестки чашей вверх
-      holder.add(petal);
-      head.add(holder);
-    }
-    var coreMat = new THREE.MeshLambertMaterial({ color: kind.core });
-    coreMat.color.convertSRGBToLinear();
-    var core = new THREE.Mesh(new THREE.SphereGeometry(kind.size * 0.32, 8, 6), coreMat);
-    core.scale.y = 0.55;
-    head.add(core);
-    g.add(head);
-    return g;
-  }
-
-  function buildFlowers() {
-    // кучками, как растут на самом деле, плюс несколько одиночек
-    var spots = [];
-    for (var s = 0; s < 7; s++) {
-      var cx = (Math.random() * 2 - 1) * 22, cz = 3 - Math.random() * 20;
-      var kind = FLOWER_KINDS[Math.floor(Math.random() * FLOWER_KINDS.length)];
-      var n = 3 + Math.floor(Math.random() * 5);
-      for (var i = 0; i < n; i++) {
-        spots.push({ x: cx + (Math.random() - 0.5) * 4, z: cz + (Math.random() - 0.5) * 3, kind: kind });
-      }
-    }
-    for (var l = 0; l < 6; l++) {
-      spots.push({
-        x: (Math.random() * 2 - 1) * 26, z: 4 - Math.random() * 24,
-        kind: FLOWER_KINDS[Math.floor(Math.random() * FLOWER_KINDS.length)]
-      });
-    }
-    spots.forEach(function (sp) {
-      var f = makeFlower(sp.kind);
-      f.position.set(sp.x, groundHeight(sp.x, sp.z) - 0.02, sp.z);
-      f.scale.setScalar(1.05 + Math.random() * 0.7);
-      scene.add(f);
-    });
-  }
-
-  // ── горизонт: холмы силуэтами, кусты и деревья спрайтами ─────────────────
-  function hillMesh(color, amp, y0, seed, z) {
-    var shape = new THREE.Shape();
-    shape.moveTo(-140, -22);
-    for (var x = -140; x <= 140; x += 4) {
-      shape.lineTo(x, y0 + Math.sin(x * 0.045 + seed) * amp + Math.sin(x * 0.013 + seed * 2.7) * amp * 1.7);
-    }
-    shape.lineTo(140, -22);
-    var hillMat = new THREE.MeshBasicMaterial({ color: color });
-    hillMat.color.convertSRGBToLinear();
-    var mesh = new THREE.Mesh(new THREE.ShapeGeometry(shape), hillMat);
-    mesh.position.z = z;
-    return mesh;
-  }
-
-  function foliageTexture(withTrunk) {
-    return canvasTex(256, withTrunk ? 320 : 200, function (ctx, w, h) {
-      if (withTrunk) {
-        ctx.fillStyle = '#5d4128';
-        ctx.fillRect(w / 2 - 12, h * 0.45, 24, h * 0.55);
-      }
-      // крона из сотни мелких пятен, тёмные снизу, светлые сверху — иначе
-      // выходит «брокколи» из десятка кругов
-      var crownH = withTrunk ? h * 0.6 : h;
-      for (var i = 0; i < 130; i++) {
-        var a = Math.random() * Math.PI * 2, r = Math.pow(Math.random(), 0.55);
-        var x = w / 2 + Math.cos(a) * r * w * 0.4;
-        var y = crownH * 0.52 + Math.sin(a) * r * crownH * 0.42;
-        var top = 1 - y / crownH;   // 1 у макушки
-        var greens = top > 0.55 ? ['#6fae4d', '#7db956'] : (top > 0.3 ? ['#4c8a3c', '#5d9c47'] : ['#376a2c', '#2f5f27']);
-        ctx.fillStyle = greens[i % 2];
-        ctx.globalAlpha = 0.8;
-        ctx.beginPath();
-        ctx.arc(x, y, 7 + Math.random() * 12, 0, 6.3);
-        ctx.fill();
-      }
-      ctx.globalAlpha = 1;
-    });
-  }
-
-  function addBackdropSprites() {
-    var bushTex = foliageTexture(false), treeTex = foliageTexture(true);
-    for (var i = 0; i < 9; i++) {
-      var tree = Math.random() < 0.45;
-      var sp = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: tree ? treeTex : bushTex, fog: true
-      }));
-      sp.center.set(0.5, 0.05);
-      var z = -26 - Math.random() * 14;
-      // не над лугом, а по краям кадра и на горизонте
-      var x = (Math.random() < 0.5 ? -1 : 1) * (16 + Math.random() * 26);
-      var h = tree ? 7 + Math.random() * 4 : 3 + Math.random() * 2;
-      sp.scale.set(h * 0.8, h, 1);
-      sp.position.set(x, groundHeight(x, z) - 0.3, z);
-      scene.add(sp);
-    }
-  }
-
-  function sunSprite() {
-    var tex = canvasTex(256, 256, function (ctx) {
-      var g = ctx.createRadialGradient(128, 128, 0, 128, 128, 128);
-      g.addColorStop(0, 'rgba(255, 252, 235, 1)');
-      g.addColorStop(0.18, 'rgba(255, 244, 200, 0.95)');
-      g.addColorStop(0.5, 'rgba(255, 236, 170, 0.25)');
-      g.addColorStop(1, 'rgba(255, 236, 170, 0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(0, 0, 256, 256);
-    });
-    var sp = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: tex, fog: false, depthWrite: false
-    }));
-    sp.scale.set(30, 30, 1);
-    sp.position.set(26, 26, -58);
-    return sp;
-  }
-
-  function cloudTexture() {
-    return canvasTex(512, 256, function (ctx) {
-      for (var i = 0; i < 16; i++) {
-        var x = 90 + Math.random() * 330, y = 90 + Math.random() * 80;
-        var r = 34 + Math.random() * 46;
-        var g = ctx.createRadialGradient(x, y, 0, x, y, r);
-        g.addColorStop(0, 'rgba(255, 255, 255, 0.55)');
-        g.addColorStop(0.7, 'rgba(255, 255, 255, 0.22)');
-        g.addColorStop(1, 'rgba(255, 255, 255, 0)');
-        ctx.fillStyle = g;
-        ctx.fillRect(0, 0, 512, 256);
-      }
-    });
-  }
-
-  function addClouds() {
-    var tex = cloudTexture();
-    for (var i = 0; i < 6; i++) {
-      var sp = new THREE.Sprite(new THREE.SpriteMaterial({
-        map: tex, fog: false, depthWrite: false,
-        opacity: 0.75 + Math.random() * 0.25
-      }));
-      var w = 16 + Math.random() * 16;
-      sp.scale.set(w, w * 0.42, 1);
-      sp.position.set((Math.random() * 2 - 1) * 55, 16 + Math.random() * 12, -55 - Math.random() * 5);
-      sp.userData.drift = 0.25 + Math.random() * 0.45;
-      clouds.push(sp);
-      scene.add(sp);
+  // Режим cover: фон заполняет экран с обрезкой краёв, без растяжения.
+  // Кадрируем через repeat/offset — шейдер фона уважает матрицу текстуры.
+  function fitBackground() {
+    var tex = scene.background;
+    if (!tex || !tex.isTexture || !tex.image || !tex.image.width) return;
+    var screenAspect = innerWidth / innerHeight;
+    var imageAspect = tex.image.width / tex.image.height;
+    if (screenAspect > imageAspect) {
+      // экран шире картинки: вся ширина, режем верх и низ
+      var ry = imageAspect / screenAspect;
+      tex.repeat.set(1, ry);
+      tex.offset.set(0, (1 - ry) / 2);
+    } else {
+      var rx = screenAspect / imageAspect;
+      tex.repeat.set(rx, 1);
+      tex.offset.set((1 - rx) / 2, 0);
     }
   }
 
   function buildEnvironment() {
-    scene.background = gradientTexture([
-      [0, '#5f9fd8'], [0.45, '#9cc9ea'], [0.75, '#cfe6ee'], [1, '#e9f2df']
-    ]);
-    scene.fog = new THREE.Fog(0xd4e6da, 30, 115);
-
+    // Небо-заглушка на время, пока с сервера не приехали настройки с фоном.
+    scene.background = new THREE.Color(0x9cc9ea);
+    // Свет нейтральный дневной и не зависит от фона: фоны очень разные
+    // (солнечный лес, ночной со светлячками, мультяшный), а раскраска
+    // на крыльях должна читаться на любом из них.
     scene.add(new THREE.HemisphereLight(0xcfe8ff, 0x568a3f, 0.85));
     var sun = new THREE.DirectionalLight(0xfff1d6, 1.05);
     sun.position.set(14, 24, 6);
-    sun.castShadow = true;
-    sun.shadow.mapSize.set(1024, 1024);
-    sun.shadow.camera.left = -26; sun.shadow.camera.right = 26;
-    sun.shadow.camera.top = 26; sun.shadow.camera.bottom = -26;
-    sun.shadow.camera.near = 4; sun.shadow.camera.far = 70;
-    sun.shadow.bias = -0.002;
     scene.add(sun);
-
-    scene.add(hillMesh(0x93b483, 2.6, 6.5, 4.2, -66));
-    scene.add(hillMesh(0x74a05e, 3.4, 4.0, 1.3, -62));
-    scene.add(sunSprite());
-    addClouds();
-    buildGround();
-    addBackdropSprites();
-    buildGrass();
-    buildFlowers();
   }
 
   // ── сцена ────────────────────────────────────────────────────────────────
@@ -557,8 +273,6 @@
     renderer.outputEncoding = THREE.sRGBEncoding;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.05;
-    renderer.shadowMap.enabled = true;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
     scene = new THREE.Scene();
@@ -580,6 +294,7 @@
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    fitBackground();
   }
 
   function animate() {
@@ -589,10 +304,6 @@
     uTime.value = t;
     FishGLB.uTime.value = t;
     for (var i = 0; i < insects.length; i++) insects[i].update(dt, t);
-    for (var k = 0; k < clouds.length; k++) {
-      clouds[k].position.x += clouds[k].userData.drift * dt;
-      if (clouds[k].position.x > 70) clouds[k].position.x = -70;
-    }
     renderer.render(scene, camera);
     WorldPage.tickShots(t);
   }
@@ -616,6 +327,9 @@
         scene.remove(insect.mesh);
         var i = insects.indexOf(insect);
         if (i !== -1) insects.splice(i, 1);
+      },
+      onSettings: function (s) {
+        applyBackground(s.backgroundUrl || null);
       }
     }
   });

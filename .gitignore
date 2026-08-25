@@ -36,3 +36,4 @@ desktop.ini
 .DS_Store
 *.swp
 node_modules/
+.claude-uploads/

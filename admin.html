@@ -302,9 +302,10 @@
     .then(function (m) {
       if (!m) return;
       meta = m;
-      // Сад и футбол рисуют окружение сами — фонов-фотографий у них нет,
-      // показываем только обитателей (тот же режим, что ?only=fish).
-      if ((m.world || 'aquarium') !== 'aquarium') document.body.classList.add('only-fish');
+      // Футбол рисует стадион сам — фонов-фотографий у него нет, показываем
+      // только игроков (тот же режим, что ?only=fish). У аквариума и сада
+      // фон — картинка, им выбор фонов нужен.
+      if ((m.world || 'aquarium') === 'football') document.body.classList.add('only-fish');
       renderMeta();
       checkAccess();
     })

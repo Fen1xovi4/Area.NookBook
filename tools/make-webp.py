@@ -42,6 +42,12 @@ for name in sorted(os.listdir(SRC)):
     # Фонов девять, лишние секунды здесь дешевле лишних килобайт у каждого.
     Image.open(src).convert('RGB').save(dst, 'WEBP', quality=QUALITY, method=6)
     before, after = os.path.getsize(src), os.path.getsize(dst)
+    # jpg пережимать бывает не во что: webp поверх jpeg-артефактов выходит
+    # даже тяжелее. Такой двойник не нужен — сервер отдаст оригинал.
+    if after >= before:
+        os.remove(dst)
+        print('%-14s %7.2f МБ — webp не легче, пропущен' % (name, before / 1048576))
+        continue
     total_before += before
     total_after += after
     print('%-14s %7.2f МБ -> %6.0f КБ  (-%.0f%%)'

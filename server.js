@@ -490,10 +490,25 @@ function readDirSafe(dir) {
   catch (e) { return []; }
 }
 
+// Встроенные фоны делятся по мирам именем файла: garden-*/football-* — свои
+// миры, остальное — аквариум (все старые фоны без префикса). Подводный риф
+// в саду и луг в аквариуме одинаково нелепы, поэтому чужие миры не видны
+// ни в выборе админки, ни в randomBackground().
+function builtinWorld(name) {
+  const m = /^(garden|football)-/.exec(name);
+  return m ? m[1] : 'aquarium';
+}
+
+function builtinBackgrounds(world) {
+  return readDirSafe(BG_DIR).filter((name) => builtinWorld(name) === world);
+}
+
 // Отдаём сразу с готовым URL: клиенту незачем знать, в какой папке лежит файл.
 function listBackgrounds(t) {
   return [
-    ...readDirSafe(BG_DIR).map((name) => ({ name, url: '/assets/backgrounds/' + name, custom: false })),
+    ...builtinBackgrounds(worldOf(readMeta(t))).map((name) => ({
+      name, url: '/assets/backgrounds/' + name, custom: false
+    })),
     ...readDirSafe(t.backgrounds).map((name) => ({
       name, url: '/data/tanks/' + t.id + '/backgrounds/' + name, custom: true
     }))
@@ -508,8 +523,8 @@ function backgroundUrl(t, name) {
 
 // Фон в аквариуме есть всегда, поэтому нужен кто-то, кто его выберет:
 // при создании аквариума, а ещё когда прежний фон удалили.
-function randomBackground() {
-  const list = readDirSafe(BG_DIR);
+function randomBackground(world) {
+  const list = builtinBackgrounds(world || 'aquarium');
   return list.length ? list[Math.floor(Math.random() * list.length)] : null;
 }
 
@@ -524,10 +539,10 @@ function readSettings(t) {
     s = Object.assign({}, DEFAULT_SETTINGS);
   }
   // Аквариум без фона — чёрная коробка, такого варианта у нас нет. Если фон
-  // потерялся (старый аквариум, битое имя), выдаём случайный и запоминаем,
-  // иначе он менялся бы при каждом обращении.
+  // потерялся (старый аквариум, битое имя, фон чужого мира), выдаём случайный
+  // из своего мира и запоминаем, иначе он менялся бы при каждом обращении.
   if (!backgroundUrl(t, s.background)) {
-    s.background = randomBackground();
+    s.background = randomBackground(worldOf(readMeta(t)));
     if (s.background) writeSettings(t, s);
   }
   return s;
@@ -750,7 +765,9 @@ function handleTankApi(req, res, t, url) {
     // Если удалили фон, который сейчас стоит в сцене, — выдаём случайный,
     // иначе аквариум остался бы с битой ссылкой до следующей смены настроек.
     const s = readSettings(t);
-    if (s.background === name) writeSettings(t, { background: randomBackground() });
+    if (s.background === name) {
+      writeSettings(t, { background: randomBackground(worldOf(readMeta(t))) });
+    }
     console.log(`- фон ${name} из ${t.id} удалён`);
     return send(res, 200, '{"ok":true}');
   }
@@ -859,12 +876,12 @@ function handleApi(req, res, url) {
         hash: hashPass(pass, salt)
       };
       fs.writeFileSync(t.meta, JSON.stringify(meta));
-      // Новый аквариум сразу с картинкой: какая достанется — дело случая.
-      // Сад и футбол рисуют окружение сами, фон-фотография им не нужен.
-      if (world === 'aquarium') {
-        const background = randomBackground();
+      // Новый аквариум или сад сразу с картинкой: какая достанется — дело
+      // случая. Футбол рисует стадион сам, фон-фотография ему не нужен.
+      const background = randomBackground(world);
+      if (background) {
         writeSettings(t, { background });
-        console.log(`+ аквариум «${meta.name}» (${id}), фон ${background}`);
+        console.log(`+ ${world} «${meta.name}» (${id}), фон ${background}`);
       } else {
         console.log(`+ ${world} «${meta.name}» (${id})`);
       }
