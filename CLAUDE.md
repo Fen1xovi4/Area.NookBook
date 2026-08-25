@@ -52,7 +52,11 @@ Royalty Free — на своём сервере можно, редистрибу
 
 ## Деплой
 
-Git-remote у проекта нет — заливаем tar-ом по SSH из корня проекта:
+Git-remote: https://github.com/Fen1xovi4/Area.NookBook (origin). В репозитории
+НЕТ моделей (`assets/models/**` в .gitignore, из истории вычищены filter-repo:
+платный пак перезаливать нельзя, бесплатные решили тоже не публиковать) —
+поэтому деплой НЕ через git: свежий клон неиграбелен, модели живут только
+локально и на сервере. Заливаем tar-ом по SSH из корня проекта:
 
 ```bash
 tar czf - --exclude=.git --exclude=data --exclude=server.log --exclude=.env . \
