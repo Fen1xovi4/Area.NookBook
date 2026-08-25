@@ -285,6 +285,9 @@
       'cap.face.zoom': 'Масштаб',
       'cap.face.use': 'Готово ✓',
       'cap.face.retake': 'Другое фото',
+      'cap.face.qr': 'Наведи камеру телефона на код — съёмка лица откроется там',
+      'cap.face.qr.file': 'или выбери файл на этом компьютере',
+      'cap.face.qr.landed': 'Сфотографируй себя на переднюю камеру — лицо ляжет на форму игрока',
 
       // ── управление ──
       'adm.doctitle': 'Аквариум — управление рыбками',
@@ -603,6 +606,9 @@
       'cap.face.zoom': 'Zoom',
       'cap.face.use': 'Done ✓',
       'cap.face.retake': 'Another photo',
+      'cap.face.qr': 'Point your phone camera at the code — face capture opens there',
+      'cap.face.qr.file': 'or pick a file on this computer',
+      'cap.face.qr.landed': 'Take a selfie with the front camera — the face goes onto the player kit',
 
       'adm.doctitle': 'Aquarium — managing the fish',
       'adm.title': 'management',
@@ -918,6 +924,9 @@
       'cap.face.zoom': 'Przybliżenie',
       'cap.face.use': 'Gotowe ✓',
       'cap.face.retake': 'Inne zdjęcie',
+      'cap.face.qr': 'Skieruj aparat telefonu na kod — zdjęcie twarzy zrobisz tam',
+      'cap.face.qr.file': 'albo wybierz plik na tym komputerze',
+      'cap.face.qr.landed': 'Zrób selfie przednim aparatem — twarz trafi na strój zawodnika',
 
       'adm.doctitle': 'Akwarium — zarządzanie rybkami',
       'adm.title': 'zarządzanie',
