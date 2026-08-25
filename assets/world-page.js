@@ -61,6 +61,8 @@
       '     <span class="ico">🗑️</span><span><b></b><i></i></span></button>',
       '   <button class="item" id="m-share" type="button">',
       '     <span class="ico">📺</span><span><b></b><i></i></span></button>',
+      '   <button class="item" id="m-full" type="button">',
+      '     <span class="ico">🖥️</span><span><b></b><i></i></span></button>',
       '   <a class="item" id="m-home" href="/">',
       '     <span class="ico">🏠</span><span><b></b><i></i></span></a>',
       '   <div class="langrow"><span id="lang"></span></div>',
@@ -123,6 +125,8 @@
     q('#m-fish i').textContent = wt(lockedNoPass() ? 'menu.fish.sub.pass' : 'menu.fish.sub');
     q('#m-share b').textContent = I18N.t('menu.share.title');
     q('#m-share i').textContent = I18N.t('menu.share.sub');
+    q('#m-full b').textContent = I18N.t(document.fullscreenElement ? 'menu.full.exit' : 'menu.full.title');
+    q('#m-full i').textContent = I18N.t('menu.full.sub');
     q('#m-home b').textContent = I18N.t('menu.home.title');
     q('#m-home i').textContent = I18N.t('menu.home.sub');
     q('#m-capback').textContent = I18N.t('menu.back');
@@ -539,6 +543,19 @@
       pinBtn.hidden = false;
       pinBtn.querySelector('b').textContent = I18N.t('menu.share.pin');
     };
+    // Полный экран. На iPhone Fullscreen API нет вовсе — там пункт не показываем.
+    var fullItem = document.getElementById('m-full');
+    if (!document.documentElement.requestFullscreen) {
+      fullItem.hidden = true;
+    } else {
+      fullItem.onclick = function () {
+        if (document.fullscreenElement) document.exitFullscreen();
+        else document.documentElement.requestFullscreen().catch(function () { /* браузер отказал — ничего не делаем */ });
+        hideMenu();
+      };
+      // Состояние меняется и мимо кнопки (Esc, F11) — подпись держим свежей.
+      document.addEventListener('fullscreenchange', applyTexts);
+    }
     ['m-capback', 'm-printback', 'm-fishback', 'm-packback', 'm-bgback', 'm-shareback'].forEach(function (id) {
       document.getElementById(id).onclick = function () { showView('menu-main', false); };
     });

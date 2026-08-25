@@ -255,6 +255,10 @@
         <span class="ico">📺</span>
         <span><b data-t="menu.share.title"></b><i data-t="menu.share.sub"></i></span>
       </button>
+      <button class="item" id="m-full" type="button">
+        <span class="ico">🖥️</span>
+        <span><b data-t="menu.full.title"></b><i data-t="menu.full.sub"></i></span>
+      </button>
       <a class="item" id="m-home" href="/">
         <span class="ico">🏠</span>
         <span><b data-t="menu.home.title"></b><i data-t="menu.home.sub"></i></span>
@@ -1903,6 +1907,25 @@
   document.getElementById('m-printback').onclick = showMainView;
   document.getElementById('m-share').onclick = showShareView;
   document.getElementById('m-shareback').onclick = showMainView;
+
+  // Полный экран. На iPhone Fullscreen API нет вовсе — там пункт не показываем.
+  var fullItem = document.getElementById('m-full');
+  if (!document.documentElement.requestFullscreen) {
+    fullItem.hidden = true;
+  } else {
+    fullItem.onclick = function () {
+      if (document.fullscreenElement) document.exitFullscreen();
+      else document.documentElement.requestFullscreen().catch(function () { /* браузер отказал — ничего не делаем */ });
+      hideMenu();
+    };
+    // Состояние меняется и мимо кнопки (Esc, F11): подпись держим свежей,
+    // а смену языка не ломаем — переключаем сам data-t.
+    document.addEventListener('fullscreenchange', function () {
+      var b = fullItem.querySelector('b');
+      b.setAttribute('data-t', document.fullscreenElement ? 'menu.full.exit' : 'menu.full.title');
+      b.textContent = I18N.t(b.getAttribute('data-t'));
+    });
+  }
 
   // Врезка сообщает, что рыбку выпустили, — показываем её сразу.
   addEventListener('message', function (e) {
