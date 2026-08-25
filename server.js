@@ -195,11 +195,21 @@ const PACK_FILE = path.join(ROOT, 'assets', 'models', 'pack', 'pack.json');
 // манифест раскрасок; дублировать его тут нельзя, иначе однажды разойдётся.
 const SHEET_FILE = path.join(ROOT, 'assets', 'coloring', 'manifest.json');
 
-function sheetKinds() {
+function manifestFish() {
   try {
     const m = JSON.parse(fs.readFileSync(SHEET_FILE, 'utf8').replace(/^﻿/, ''));
-    return new Set((m.fish || []).map((f) => f.name));
-  } catch (e) { return new Set(); }
+    return m.fish || [];
+  } catch (e) { return []; }
+}
+
+function sheetKinds() {
+  return new Set(manifestFish().map((f) => f.name));
+}
+
+// «Готовые» обитатели неаквариумных миров: у них нет купленного пака,
+// зато у каждого вида манифеста есть модель со своей заводской текстурой.
+function worldSpecies(world) {
+  return manifestFish().filter((f) => (f.world || 'aquarium') === world);
 }
 
 function listPack() {
@@ -672,14 +682,17 @@ function handleTankApi(req, res, t, url) {
       const fid = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 6);
 
       if (data.type === 'pack') {
-        const model = listPack().find((m) => m.name === data.model);
+        // Аквариуму — купленный пак, остальным мирам — виды их манифеста.
+        const world = worldOf(readMeta(t));
+        const list = world === 'aquarium' ? listPack() : worldSpecies(world);
+        const model = list.find((m) => m.name === data.model);
         if (!model) return send(res, 400, '{"error":"нет такой модели в паке"}');
         ensureTank(t);
         fs.writeFileSync(path.join(t.fish, fid + '.json'), JSON.stringify({
           id: fid, type: 'pack', model: model.name, title: model.title,
           created: new Date().toISOString()
         }));
-        console.log(`+ рыбка из пака ${model.name} в ${t.id} — всего ${listFish(t).length}`);
+        console.log(`+ готовый ${model.name} в ${t.id} — всего ${listFish(t).length}`);
         return send(res, 200, JSON.stringify({ ok: true, id: fid }));
       }
 

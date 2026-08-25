@@ -103,6 +103,26 @@ body { background: #101013; }
   border: 0; border-radius: 14px; background: transparent;
 }
 
+.menu .packgrid {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 8px;
+}
+.menu .packitem {
+  display: flex; flex-direction: column; align-items: center; gap: 4px;
+  padding: 6px 6px 8px; font: inherit; cursor: pointer; color: var(--ink);
+  background: rgba(88, 214, 255, 0.06);
+  border: 1px solid var(--line); border-radius: 12px;
+  transition: border-color 0.15s, transform 0.1s;
+}
+.menu .packitem:hover { border-color: var(--accent); transform: translateY(-2px); }
+.menu .packitem img, .menu .packitem .ph {
+  width: 100%; aspect-ratio: 116 / 74; border-radius: 8px; display: block;
+  object-fit: contain; background: #0a2233;
+}
+.menu .packitem .ph { display: grid; place-content: center; font-size: 10px; color: var(--muted); }
+.menu .packitem .t { font-size: 11px; line-height: 1.25; color: var(--muted); text-align: center; }
+.menu .packitem[disabled] { opacity: 0.5; cursor: default; }
+
 .menu .langrow { display: flex; justify-content: center; margin-top: 12px; }
 .menu .langpick { display: inline-flex; gap: 4px; }
 .menu .langpick button {

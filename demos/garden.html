@@ -18,6 +18,7 @@
 <script src="/assets/i18n.js"></script>
 <script src="/vendor/qr.js"></script>
 <script src="/assets/fish-frame.js"></script>
+<script src="/assets/fish-thumbs.js"></script>
 <script src="/assets/fish-glb.js"></script>
 <script src="/assets/painted-uv.js"></script>
 <script src="/assets/steering.js"></script>
@@ -113,9 +114,14 @@
       if (spec.gltf) {
         var clone = spec.gltf.scene;
         // У части моделей нормалей нет вовсе (конвертация из OBJ) — без них
-        // MeshStandardMaterial рисует чёрный силуэт.
+        // MeshStandardMaterial рисует чёрный силуэт. Заодно запоминаем
+        // родные геометрии (в порядке обхода): applyPlanar перепишет UV под
+        // лист, а готовым насекомым нужна заводская развёртка.
+        var stockGeos = [];
         clone.traverse(function (o) {
-          if (o.isMesh && !o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+          if (!o.isMesh) return;
+          if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+          stockGeos.push(o.geometry);
         });
         var pivot = new THREE.Group();
         pivot.quaternion.copy(spec.info.quat);
@@ -128,7 +134,7 @@
 
         // размах крыльев в локальных единицах модели — для шейдера маха
         var box = new THREE.Box3().setFromObject(clone);
-        t = { scene: clone, info: spec.info, span: box.max.x - box.min.x };
+        t = { scene: clone, info: spec.info, span: box.max.x - box.min.x, stockGeos: stockGeos };
         templates[info.name] = t;
       }
       templateQueue[info.name].forEach(function (fn) { fn(t); });
@@ -150,12 +156,24 @@
     pivot.scale.setScalar(tpl.info.scale * (size || 1));
     pivot.add(clone);
 
-    var self = this;
+    var self = this, meshIndex = 0;
     clone.traverse(function (o) {
       if (!o.isMesh) return;
-      o.material = addFlap(new THREE.MeshStandardMaterial({
-        map: tex, roughness: 0.6, metalness: 0.05, side: THREE.DoubleSide
-      }), tpl.span, kindP.flap[0], kindP.flap[1], self.phase);
+      var mat;
+      if (tex) {
+        mat = new THREE.MeshStandardMaterial({
+          map: tex, roughness: 0.6, metalness: 0.05, side: THREE.DoubleSide
+        });
+      } else {
+        // Готовое насекомое: заводская текстура и родная UV-развёртка,
+        // сохранённая в шаблоне до планарной перерисовки под лист.
+        // Материал клонируем: фаза маха у каждого экземпляра своя.
+        o.geometry = tpl.stockGeos[meshIndex];
+        mat = o.material.clone();
+        mat.side = THREE.DoubleSide;
+      }
+      meshIndex++;
+      o.material = addFlap(mat, tpl.span, kindP.flap[0], kindP.flap[1], self.phase);
     });
 
     this.mesh = new THREE.Group();
@@ -316,8 +334,10 @@
       spawnPainted: function (item, info, tex, done) {
         withTemplate(info, function (tpl) {
           if (!tpl) return done(null);
-          tex.encoding = THREE.sRGBEncoding;
-          tex.flipY = true;
+          if (tex) {   // null = готовое насекомое, летит со своей текстурой
+            tex.encoding = THREE.sRGBEncoding;
+            tex.flipY = true;
+          }
           var insect = new Insect(info, tpl, tex, item.size);
           insects.push(insect);
           done(insect);

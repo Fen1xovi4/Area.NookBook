@@ -86,6 +86,12 @@
         scene.add(holder);
 
         var along = b.size[axes.body] || 1;
+        // Габариты моделей гуляют на три порядка: пак — около юнита, бабочки
+        // сада — до пары сотен. С жёсткими near/far крупная модель целиком
+        // вылетала за дальнюю плоскость и превью выходило пустым.
+        camera.near = along * 0.05;
+        camera.far = along * 6;
+        camera.updateProjectionMatrix();
         camera.position.set(0, 0, along * 1.55);
         camera.lookAt(0, 0, 0);
         renderer.render(scene, camera);

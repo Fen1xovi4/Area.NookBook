@@ -33,8 +33,12 @@
   }
 
   // ── разметка меню ─────────────────────────────────────────────────────────
-  // Как в аквариуме, но без пунктов «покупная рыбка», «фон» и «покормить»:
-  // новые миры рисуют окружение сами, а обитатели в них только раскрашенные.
+  // Как в аквариуме, но без «покормить». «Готовый обитатель» и «фон» есть
+  // не везде: у футбола окружение своё и игроки только раскрашенные —
+  // эти два пункта показываются по табличкам ниже.
+  var HAS_PACK = { garden: true };   // готовые: виды манифеста со своей текстурой
+  var HAS_BG = { garden: true };     // фоны-картинки, как в аквариуме
+
   function menuHtml() {
     return [
       '<div class="menu" id="menu" hidden>',
@@ -47,8 +51,12 @@
       '   <p class="who"><span id="m-count">…</span> · <button class="code" id="m-key" type="button"></button></p>',
       '   <button class="item main" id="m-capture" type="button">',
       '     <span class="ico">📷</span><span><b></b><i></i></span></button>',
+      '   <button class="item" id="m-pack" type="button" hidden>',
+      '     <span class="ico">🦋</span><span><b></b><i></i></span></button>',
       '   <button class="item" id="m-print" type="button">',
       '     <span class="ico">🖨️</span><span><b></b><i></i></span></button>',
+      '   <button class="item" id="m-bg" type="button" hidden>',
+      '     <span class="ico">🖼️</span><span><b></b><i></i></span></button>',
       '   <button class="item" id="m-fish" type="button">',
       '     <span class="ico">🗑️</span><span><b></b><i></i></span></button>',
       '   <button class="item" id="m-share" type="button">',
@@ -68,6 +76,16 @@
       '  <div id="menu-fish" hidden>',
       '   <button class="goback" id="m-fishback" type="button"></button>',
       '   <iframe class="capframe" id="fishframe"></iframe>',
+      '  </div>',
+      '  <div id="menu-pack" hidden>',
+      '   <button class="goback" id="m-packback" type="button"></button>',
+      '   <h2 id="picker-title"></h2>',
+      '   <p class="who" id="picker-sub"></p>',
+      '   <div class="packgrid" id="packgrid"></div>',
+      '  </div>',
+      '  <div id="menu-bg" hidden>',
+      '   <button class="goback" id="m-bgback" type="button"></button>',
+      '   <iframe class="capframe" id="bgframe"></iframe>',
       '  </div>',
       '  <div id="menu-share" class="share" hidden>',
       '   <button class="goback" id="m-shareback" type="button"></button>',
@@ -91,6 +109,14 @@
     q('#m-rename').title = I18N.t('menu.rename.hint');
     q('#m-capture b').textContent = wt('menu.capture.title');
     q('#m-capture i').textContent = wt('menu.capture.sub');
+    q('#m-pack b').textContent = wt('menu.pack.title');
+    q('#m-pack i').textContent = wt('menu.pack.sub');
+    q('#m-bg b').textContent = wt('menu.bg.title');
+    q('#m-bg i').textContent = wt('menu.bg.sub');
+    q('#picker-title').textContent = wt('menu.picker.title');
+    q('#picker-sub').textContent = wt('menu.picker.sub');
+    q('#m-packback').textContent = I18N.t('menu.back');
+    q('#m-bgback').textContent = I18N.t('menu.back');
     q('#m-print b').textContent = I18N.t('menu.print.title');
     q('#m-print i').textContent = wt('menu.print.sub');
     q('#m-fish b').textContent = wt('menu.fish.title');
@@ -137,7 +163,7 @@
   }
 
   function views() {
-    return ['menu-main', 'menu-capture', 'menu-print', 'menu-fish', 'menu-share']
+    return ['menu-main', 'menu-capture', 'menu-print', 'menu-fish', 'menu-pack', 'menu-bg', 'menu-share']
       .map(function (id) { return document.getElementById(id); });
   }
 
@@ -299,6 +325,20 @@
 
       list.forEach(function (item) {
         if (seen.hasOwnProperty(item.id)) return;
+
+        // Готовые: текстуры-рисунка нет, модель летит со своей заводской.
+        if (item.type === 'pack') {
+          var pinfo = specs[item.model];
+          if (!pinfo) return;   // вид другого мира или неизвестный
+          seen[item.id] = null;
+          hooks.spawnPainted(item, pinfo, null, function (handle) {
+            if (!handle) { delete seen[item.id]; return; }
+            if (seen.hasOwnProperty(item.id)) { seen[item.id] = handle; wantShot(4); }
+            else hooks.removePainted(handle);             // удалили, пока строился
+          });
+          return;
+        }
+
         var info = specs[item.kind];
         if (!info) {
           // Вид другого мира или неизвестный — молча пропускаем: записи
@@ -316,6 +356,58 @@
         });
       });
     }).catch(function () { /* сервер без API — просто пусто */ });
+  }
+
+  // ── «готовый обитатель»: виды манифеста со своей заводской текстурой ──────
+  var packFilled = false;
+
+  function fillPack() {
+    if (packFilled) return;
+    var grid = document.getElementById('packgrid');
+    var names = Object.keys(specs);
+    if (!names.length) return;   // манифест ещё в пути — заполним при следующем открытии
+    packFilled = true;
+    grid.textContent = '';
+    names.forEach(function (name) {
+      var info = specs[name];
+      var b = document.createElement('button');
+      b.className = 'packitem';
+      b.type = 'button';
+      b.innerHTML = '<span class="ph"></span><span class="t"></span>';
+      b.querySelector('.ph').textContent = I18N.t('menu.picker.drawing');
+      b.querySelector('.t').textContent =
+        (info.titles && (info.titles[I18N.lang] || info.titles.ru)) || info.title || name;
+      b.onclick = function () { addPack(name, b); };
+      grid.appendChild(b);
+      // Миниатюры рисует общий рендерер из fish-thumbs.js; страница без него
+      // (или без WebGL) обойдётся значком — кнопка работает и так.
+      if (!window.FishThumbs) { b.querySelector('.ph').textContent = '🦋'; return; }
+      FishThumbs.get({ name: name, url: info.model }, function (url) {
+        var slot = b.querySelector('.ph');
+        if (!slot) return;
+        if (!url) { slot.textContent = '🦋'; return; }
+        var img = document.createElement('img');
+        img.src = url;
+        img.alt = '';
+        slot.parentNode.replaceChild(img, slot);
+      });
+    });
+  }
+
+  function addPack(name, btn) {
+    btn.disabled = true;
+    Tank.send(Tank.api + '/fish', { body: JSON.stringify({ type: 'pack', model: name }) })
+      .then(function (r) { return r.json(); })
+      .then(function (res) {
+        if (res.error) throw new Error(res.error);
+        hideMenu();
+        pollPainted();   // обитатель нужен сейчас, а не через пять секунд
+      })
+      .catch(function () {
+        var label = btn.querySelector('.t');
+        if (label) label.textContent = I18N.t('menu.picker.failed');
+      })
+      .then(function () { btn.disabled = false; });
   }
 
   function initPainted() {
@@ -423,6 +515,22 @@
       showView('menu-fish', true);
       frameUp(document.getElementById('fishframe'), Tank.url + '/admin?embed=1&only=fish');
     };
+    if (HAS_PACK[opts.world]) {
+      var packItem = document.getElementById('m-pack');
+      packItem.hidden = false;
+      packItem.onclick = function () {
+        showView('menu-pack', true);
+        fillPack();
+      };
+    }
+    if (HAS_BG[opts.world]) {
+      var bgItem = document.getElementById('m-bg');
+      bgItem.hidden = false;
+      bgItem.onclick = function () {
+        showView('menu-bg', true);
+        frameUp(document.getElementById('bgframe'), Tank.url + '/admin?embed=1&only=bg');
+      };
+    }
     document.getElementById('m-share').onclick = function () {
       showView('menu-share', false);
       drawQr(document.getElementById('share-qr'), tankLink());
@@ -431,7 +539,7 @@
       pinBtn.hidden = false;
       pinBtn.querySelector('b').textContent = I18N.t('menu.share.pin');
     };
-    ['m-capback', 'm-printback', 'm-fishback', 'm-shareback'].forEach(function (id) {
+    ['m-capback', 'm-printback', 'm-fishback', 'm-packback', 'm-bgback', 'm-shareback'].forEach(function (id) {
       document.getElementById(id).onclick = function () { showView('menu-main', false); };
     });
     document.getElementById('m-close').onclick = hideMenu;

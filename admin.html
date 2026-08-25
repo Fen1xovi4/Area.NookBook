@@ -306,6 +306,15 @@
       // только игроков (тот же режим, что ?only=fish). У аквариума и сада
       // фон — картинка, им выбор фонов нужен.
       if ((m.world || 'aquarium') === 'football') document.body.classList.add('only-fish');
+      // Подпись секции — под мир: меняем сам data-t, чтобы смена языка
+      // продолжала переводить её правильно.
+      if (m.world === 'garden') {
+        var bgLabel = document.querySelector('[data-t="adm.bg"]');
+        if (bgLabel) {
+          bgLabel.setAttribute('data-t', 'adm.bg.garden');
+          bgLabel.textContent = I18N.t('adm.bg.garden');
+        }
+      }
       renderMeta();
       checkAccess();
     })
@@ -405,7 +414,9 @@
     if (!slots.length) return;
     FishThumbs.withPack(function (idx) {
       slots.forEach(function (slot) {
-        var model = idx[slot.dataset.thumb];
+        // Аквариумные готовые — из пака; насекомые сада в паке не живут,
+        // их модель знает манифест раскрасок.
+        var model = idx[slot.dataset.thumb] || manifestModels[slot.dataset.thumb];
         if (!model) return;
         FishThumbs.get(model, function (url) {
           if (!url || !slot.parentNode) return;
@@ -418,11 +429,15 @@
     });
   }
 
-  var titles = {};   // вид → название на трёх языках, из манифеста раскрасок
+  var titles = {};          // вид → название на трёх языках, из манифеста раскрасок
+  var manifestModels = {};  // вид → {name, url} для миниатюр неаквариумных готовых
   fetch('/assets/coloring/manifest.json')
     .then(function (r) { return r.json(); })
     .then(function (m) {
-      m.fish.forEach(function (f) { titles[f.name] = f.titles || { ru: f.title }; });
+      m.fish.forEach(function (f) {
+        titles[f.name] = f.titles || { ru: f.title };
+        if (f.model) manifestModels[f.name] = { name: f.name, url: f.model };
+      });
       refresh();
     })
     .catch(refresh);
