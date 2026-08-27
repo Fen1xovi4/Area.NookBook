@@ -27,7 +27,7 @@
     width: min(420px, 100%); max-height: 100%; overflow: auto;
     background: rgba(6, 22, 38, 0.94);
     border: 1px solid var(--line); border-radius: 20px;
-    padding: 20px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
+    padding: 16px; box-shadow: 0 30px 80px rgba(0, 0, 0, 0.55);
     animation: menu-rise 0.18s ease-out;
   }
   @keyframes menu-rise { from { transform: translateY(14px); opacity: 0 } to { transform: none; opacity: 1 } }
@@ -103,8 +103,8 @@
   .menu .share .pinhint { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 
   .menu .item {
-    display: flex; align-items: center; gap: 12px;
-    width: 100%; margin-bottom: 8px; padding: 11px 14px;
+    display: flex; align-items: center; gap: 10px;
+    width: 100%; margin-bottom: 6px; padding: 8px 12px;
     font: inherit; text-align: left; text-decoration: none; cursor: pointer;
     color: var(--ink); background: rgba(88, 214, 255, 0.08);
     border: 1px solid var(--line); border-radius: 14px;
@@ -117,9 +117,9 @@
   .menu .item:active { transform: translateY(1px); }
   .menu .item.main { background: var(--accent); border-color: var(--accent); color: #04101c; }
   .menu .item.main:hover { background: #7ce0ff; }
-  .menu .item .ico { flex: none; width: 26px; font-size: 21px; line-height: 1; text-align: center; }
-  .menu .item b { display: block; font-size: 14px; font-weight: 600; }
-  .menu .item i { display: block; font-style: normal; font-size: 12px; opacity: 0.72; }
+  .menu .item .ico { flex: none; width: 24px; font-size: 18px; line-height: 1; text-align: center; }
+  .menu .item b { display: block; font-size: 13px; font-weight: 600; }
+  .menu .item i { display: block; font-style: normal; font-size: 11px; opacity: 0.72; }
 
   /* Выбор покупной рыбки: тот же список, что раньше жил в админке, только
      теперь он рядом с аквариумом — видно, кого добавляешь и к кому. */
