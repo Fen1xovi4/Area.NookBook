@@ -25,9 +25,11 @@
 узнаёт мир из meta и не пускает листы чужого мира).
 
 Модели рыб: купленный пак CGTrader «Coral Reef Fish Collection» (28 рифовых рыб,
-Royalty Free — на своём сервере можно, редистрибутить файлы нельзя) + shark/mantaray/dolphin
-(CC0 Quaternius) + barramundi (CC0 Khronos, без листа — на него ссылается живая рыбка
-в аквариуме 2gsj8dgr3h, не удалять). Итого 32 вида, 15 с листами раскрасок. См. `CREDITS.md`.
+Royalty Free — на своём сервере можно, редистрибутить файлы нельзя) + barramundi
+(CC0 Khronos, без листа — на него ссылается живая рыбка в аквариуме 2gsj8dgr3h,
+не удалять). Итого 29 видов, 12 с листами раскрасок. Бывшие shark/mantaray/dolphin
+(CC0 Quaternius) убраны из игры, но их строки в `SPECIES` остались с `hidden: true` —
+удалять их оттуда нельзя, иначе сдвинутся коды меток видов ниже. См. `CREDITS.md`.
 Исходный архив купленного пака: `../models-src.zip` (держать ВНЕ assets/ — всё в assets/
 раздаётся сайтом, а платный пак публиковать нельзя).
 
@@ -75,7 +77,7 @@ ssh deploy@157.173.97.19 'cd /srv/apps/area-nookbook \
   Бэкапить её — простым архивом этой папки.
 - `.env` на сервере: `DOMAIN=area.nookbook.pl` (+ лимиты AQUA_*). `--exclude=.env`
   в tar обязателен — иначе локальный `.env` затрёт серверный.
-- Проверка после деплоя: `curl -s https://area.nookbook.pl/api/pack` — должно вернуть 32 вида;
+- Проверка после деплоя: `curl -s https://area.nookbook.pl/api/pack` — должно вернуть 29 видов;
   `docker ps --filter name=aqua` — статус healthy.
 
 ## Пайплайн моделей (если добавляем/меняем виды)

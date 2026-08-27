@@ -9,7 +9,11 @@
 | Модели | Автор | Источник | Лицензия |
 |---|---|---|---|
 | 28 рифовых рыб (clownfish, bluetang, discus…) | JosKata | CGTrader, «Coral Reef Fish Collection animated — Game Ready pack 8» | Royalty Free (куплено; редистрибуция файлов запрещена — в публичные репозитории не выкладывать) |
-| shark, mantaray, dolphin | Quaternius | poly.pizza | CC0 1.0 |
+| barramundi | Khronos Group (glTF Sample Assets) | github.com/KhronosGroup/glTF-Sample-Assets | CC0 1.0 |
+
+Бесплатные shark, mantaray и dolphin (Quaternius, CC0) из игры убраны в августе 2026 —
+модели выглядели чужеродно и плавали неправильно. Их строки в `SPECIES`
+(tools/make-coloring.js) остались с пометкой `hidden` — коды угловых меток заняты насовсем.
 
 Исходный архив купленного пака: `@NookBook/models-src.zip` (вне веб-корня и деплоя — специально).
 

@@ -86,11 +86,15 @@ const SPECIES = [
     titles: { ru: 'Рыба-бабочка',      en: 'Butterflyfish',            pl: 'Motylek' } },
   { name: 'discus1',                len: 1.8, eye: null,
     titles: { ru: 'Дискус',            en: 'Discus',                   pl: 'Paletka' } },
-  { name: 'shark',           len: 2.6, eye: null,
+  // Акулу, ската и дельфина из игры убрали (бесплатные модели плавали
+  // криво), но строки остаются: удаление сдвинуло бы коды меток всех видов
+  // ниже. hidden — вид не попадает ни в манифест, ни в листы, а его коды
+  // так и числятся за ним.
+  { name: 'shark',           len: 2.6, eye: null, hidden: true,
     titles: { ru: 'Акула',            en: 'Shark',           pl: 'Rekin' } },
-  { name: 'mantaray',        len: 2.6, eye: null,
+  { name: 'mantaray',        len: 2.6, eye: null, hidden: true,
     titles: { ru: 'Скат манта',       en: 'Manta ray',       pl: 'Manta' } },
-  { name: 'dolphin',         len: 2.5, eye: null,
+  { name: 'dolphin',         len: 2.5, eye: null, hidden: true,
     titles: { ru: 'Дельфин',          en: 'Dolphin',         pl: 'Delfin' } },
 
   // ── сад (мир garden): насекомые, лист — вид сверху ──
@@ -591,7 +595,7 @@ function main() {
   }
   const contours = JSON.parse(fs.readFileSync(src, 'utf8'));
 
-  const missing = SPECIES.filter((s) => !contours[s.name]).map((s) => s.name);
+  const missing = SPECIES.filter((s) => !s.hidden && !contours[s.name]).map((s) => s.name);
   if (missing.length) {
     console.error('в contours.json нет видов: ' + missing.join(', '));
     process.exit(1);
@@ -600,7 +604,10 @@ function main() {
   const picked = pickCodes(SPECIES.length * 4);
   const codes = picked.codes;
   checkLock(codes);
+  // Скрытые виды пропускаем ПОСЛЕ раздачи кодов: индекс i у остальных
+  // не меняется, их метки и id остаются прежними.
   const fish = SPECIES.map((s, i) => {
+    if (s.hidden) return null;
     const c = contours[s.name];
     const f = {
       id: i + 1,
@@ -635,7 +642,7 @@ function main() {
     // Глаз — подсказка для бокового силуэта рыбы; сверху и анфас он не нужен.
     f.eye = s.eye || ((s.projection || 'side') === 'side' ? eyeAt(c.contour, c.bbox) : null);
     return f;
-  });
+  }).filter(Boolean);
 
   fs.mkdirSync(OUT, { recursive: true });
   // старые листы убираем: они были сняты с моделей, которых больше нет в игре
