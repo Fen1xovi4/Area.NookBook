@@ -6,14 +6,17 @@
 
 ## Миры
 
-Три типа пространства, мир выбирается на главной при создании и записывается в
-`meta.json` (`world: aquarium|garden|football`; нет поля = аквариум — все старые):
+Четыре типа пространства, мир выбирается на главной при создании и записывается в
+`meta.json` (`world: aquarium|garden|football|space`; нет поля = аквариум — все старые):
 
 - **aquarium** — `demos/realistic-tank.html` (живой прод-код, трогаем минимально);
 - **garden** — `demos/garden.html`: насекомые летают над лугом, листы — вид сверху;
 - **football** — `demos/football.html`: игроки бегают, мяч, рандомные голы, табло;
   команда (red/blue) выбирается на съёмке; второй способ создать игрока — фото
-  лица в овальной рамке (`face: true` в записи, форма рисуется канвасом).
+  лица в овальной рамке (`face: true` в записи, форма рисуется канвасом);
+- **space** — `demos/space.html`: ракеты и корабли летают над планетой (сфера с
+  процедурной канвас-текстурой, звёзды, выхлопы); фонов-картинок нет (как у
+  футбола, админка в режиме only-fish); листы ракет — side, спутника — top.
 
 `pageFor()` в server.js читает meta и отдаёт страницу мира. Новые страницы
 собраны на общих модулях: `assets/world-page.js` (меню/опросы/превью),
@@ -84,10 +87,11 @@ ssh deploy@157.173.97.19 'cd /srv/apps/area-nookbook \
 
 1. GLB (CC0/CC-BY, poly.pizza / Sketchfab / Khronos) → `npx gltf-pipeline -i x.glb -o <папка>/<name>.gltf --separate`.
    Аквариумные рыбы — в `assets/models/pack/<name>/`; виды других миров — в
-   `assets/models/garden/` или `assets/models/football/` (НЕ в pack: на проде
-   pack затенён read-only bind-mount-ом, см. «Деплой»).
+   `assets/models/garden|football|space/` (НЕ в pack: на проде pack затенён
+   read-only bind-mount-ом, см. «Деплой»).
 2. Ориентация: если модель не «нос → +Z, спина → +Y», повернуть
-   `node tools/normalize-gltf.js <файл.gltf> <градусы-вокруг-Y>` и в данных вида
+   `node tools/normalize-gltf.js <файл.gltf> <градусы> [x|y|z]` (ось по умолчанию Y;
+   вертикальную ракету кладут поворотом 90 вокруг X) и в данных вида
    поставить `frame: 'identity'` (пропуск эвристики осей — обязателен для
    бабочек и гуманоидов, у них габаритный разбор врёт). Проверка ориентации —
    смотровая `/tools/model-view.html?url=…` (4 ракурса с осями).

@@ -276,7 +276,7 @@
   var meta = { id: Tank.id, name: I18N.t('home.create.value') };
 
   function renderMeta() {
-    var ico = { aquarium: '🐠', garden: '🦋', football: '⚽' }[meta.world] || '🐠';
+    var ico = { aquarium: '🐠', garden: '🦋', football: '⚽', space: '🚀' }[meta.world] || '🐠';
     document.getElementById('tank-name').textContent = ico + ' ' + meta.name;
     document.title = meta.name + ' — ' + I18N.t('adm.title');
   }
@@ -302,10 +302,11 @@
     .then(function (m) {
       if (!m) return;
       meta = m;
-      // Футбол рисует стадион сам — фонов-фотографий у него нет, показываем
-      // только игроков (тот же режим, что ?only=fish). У аквариума и сада
-      // фон — картинка, им выбор фонов нужен.
-      if ((m.world || 'aquarium') === 'football') document.body.classList.add('only-fish');
+      // Футбол и космос рисуют окружение сами — фонов-фотографий у них нет,
+      // показываем только обитателей (тот же режим, что ?only=fish).
+      // У аквариума и сада фон — картинка, им выбор фонов нужен.
+      var w = m.world || 'aquarium';
+      if (w === 'football' || w === 'space') document.body.classList.add('only-fish');
       // Подпись секции — под мир: меняем сам data-t, чтобы смена языка
       // продолжала переводить её правильно.
       if (m.world === 'garden') {

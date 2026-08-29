@@ -127,7 +127,22 @@ const SPECIES = [
   { name: 'footballer',       len: 1.9, eye: null,
     world: 'football', projection: 'front', frame: 'identity', lengthAxis: 'y',
     model: '/assets/models/football/footballer/footballer.gltf',
-    titles: { ru: 'Футболист',         en: 'Footballer',        pl: 'Piłkarz' } }
+    titles: { ru: 'Футболист',         en: 'Footballer',        pl: 'Piłkarz' } },
+
+  // ── космос (мир space): ракеты и корабли, лист — вид сбоку
+  //    (спутник — сверху: панели раскрыты в плане, сбоку их не видно) ──
+  { name: 'rocket',           len: 2.2, eye: null,
+    world: 'space', projection: 'side', frame: 'identity',
+    model: '/assets/models/space/rocket/rocket.gltf',
+    titles: { ru: 'Ракета',            en: 'Rocket',            pl: 'Rakieta' } },
+  { name: 'spaceship',        len: 2.0, eye: null,
+    world: 'space', projection: 'side', frame: 'identity',
+    model: '/assets/models/space/spaceship/spaceship.gltf',
+    titles: { ru: 'Космический корабль', en: 'Spaceship',       pl: 'Statek kosmiczny' } },
+  { name: 'satellite',        len: 1.4, eye: null,
+    world: 'space', projection: 'top', frame: 'identity',
+    model: '/assets/models/space/satellite/satellite.gltf',
+    titles: { ru: 'Спутник',           en: 'Satellite',         pl: 'Satelita' } }
 ];
 
 // Имя файла листа: русский лежит по старому адресу, остальные рядом с ним.

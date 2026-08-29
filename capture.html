@@ -487,8 +487,9 @@
         map: tex, roughness: 0.5, metalness: 0.05, side: THREE.DoubleSide
       });
       // Виляние хвостом — только у «боковых» видов: бабочку и футболиста
-      // изгиб вдоль тела кривил бы без всякого смысла.
-      if (geo.userData.projection === 'side') {
+      // изгиб вдоль тела кривил бы без всякого смысла. Ракеты космоса тоже
+      // «боковые», но корпус у них жёсткий — им изгиб не положен.
+      if (geo.userData.projection === 'side' && WORLD !== 'space') {
         FishGLB.addBend(mat, {
           bodyMask: new THREE.Vector3(0, 0, 1),
           latMask: new THREE.Vector3(1, 0, 0),
@@ -584,8 +585,8 @@
       document.getElementById('boost-row').hidden = false;
       // размер каждой новой рыбки — обычный, ползунок в середину
       document.getElementById('size').value = 100;
-      showTeamRow();
       if (WORLD === 'football' && r.boost) armNumberOverlay(r.boost);
+      showTeamRow();
       show('s-preview');
       show3D(r.kind);
       return r;
@@ -612,14 +613,14 @@
     var on = WORLD === 'football';
     document.getElementById('teamrow').hidden = !on;
     document.getElementById('team-label').hidden = !on;
-    if (on) renderTeam();
     document.getElementById('numrow').hidden = !on;
     document.getElementById('num-label').hidden = !on;
-  }
+    if (on) renderTeam();
     // Команда — общая на серию съёмок, а номер у каждого игрока свой:
     // к новому превью поле начинается пустым.
     kitNumber = null;
     numEl.value = '';
+  }
 
   ['red', 'blue'].forEach(function (t) {
     document.getElementById('team-' + t).addEventListener('click', function () {
@@ -632,7 +633,6 @@
     });
   });
 
-  // Живая подстройка: пиксели пересчитываются из сырой копии, 3D-текстура
   // ── номер на майке (футбол) ──────────────────────────────────────────────
   // Номер не отдельное поле записи, а часть текстуры: рисуется на груди
   // (планарная UV «анфас» покажет его и на спине — зеркально) и уезжает на
@@ -685,6 +685,7 @@
     }
   });
 
+  // Живая подстройка: пиксели пересчитываются из сырой копии, 3D-текстура
   // обновляется через needsUpdate. Во время протяжки события схлопывает
   // rAF-затвор, но rAF — только оптимизация: в перекрытой вкладке Chrome
   // его замораживает, поэтому отпускание ползунка ('change') и отправка
@@ -933,8 +934,8 @@
     if (!result || !result.faceMode || !FACE.bmp) return;
     var src = composePlayer(result.info, KIT[team], faceOvalCanvas());
     result.texCanvas.getContext('2d').drawImage(src, 0, 0);
-    if (P3.mesh && P3.mesh.material.map) P3.mesh.material.map.needsUpdate = true;
     drawKitNumber(result.texCanvas);
+    if (P3.mesh && P3.mesh.material.map) P3.mesh.material.map.needsUpdate = true;
     var flat = document.getElementById('p-img');
     if (!flat.hidden) flat.src = result.texCanvas.toDataURL('image/png');
   }

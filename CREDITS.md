@@ -37,3 +37,13 @@
 | footballer (Man, анимированный: Run/Idle/Clapping…) | Quaternius | [poly.pizza/m/HMnuH5geEG](https://poly.pizza/m/HMnuH5geEG), Animated Men Pack | CC0 1.0 |
 
 Поле, ворота, мяч и конфетти — процедурные, рисуются кодом сцены.
+
+## 3D-модели космоса (assets/models/space/)
+
+| Модель | Автор | Источник | Лицензия |
+|---|---|---|---|
+| rocket (Rocketship) | jeremy | [poly.pizza/m/ah8WSBbizA6](https://poly.pizza/m/ah8WSBbizA6) | CC-BY 3.0 |
+| spaceship (Spaceship, Ultimate Space Kit) | Quaternius | [poly.pizza/m/Jqfed124pQ](https://poly.pizza/m/Jqfed124pQ) | CC0 1.0 |
+| satellite (Satellite) | Poly by Google | [poly.pizza/m/1C3zb8Q9USk](https://poly.pizza/m/1C3zb8Q9USk) | CC-BY 3.0 |
+
+Планета, облака, атмосфера, звёзды и выхлопы ракет — процедурные, рисуются кодом сцены.

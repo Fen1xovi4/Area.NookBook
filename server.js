@@ -179,7 +179,7 @@ function publicMeta(m) {
 // ── миры ───────────────────────────────────────────────────────────────────
 // Тип пространства выбирается при создании и больше не меняется. Старые
 // meta.json поля world не имеют — они аквариумы, как и всё, что было до миров.
-const WORLDS = ['aquarium', 'garden', 'football'];
+const WORLDS = ['aquarium', 'garden', 'football', 'space'];
 
 function worldOf(m) {
   return WORLDS.includes(m && m.world) ? m.world : 'aquarium';
@@ -919,7 +919,8 @@ function handleApi(req, res, url) {
 const WORLD_PAGES = {
   aquarium: 'demos/realistic-tank.html',
   garden: 'demos/garden.html',
-  football: 'demos/football.html'
+  football: 'demos/football.html',
+  space: 'demos/space.html'
 };
 
 function pageFor(url) {

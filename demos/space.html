@@ -1,0 +1,463 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Космос</title>
+<link rel="stylesheet" href="/assets/ui.css">
+<link rel="stylesheet" href="/assets/world-page.css">
+</head>
+<body>
+
+<div class="loading" id="loading"></div>
+
+<!-- Пути абсолютные: страница отдаётся по /t/<id>, относительные сломались бы. -->
+<script src="/vendor/three.min.js"></script>
+<script src="/vendor/GLTFLoader.js"></script>
+<script src="/vendor/DRACOLoader.js"></script>
+<script src="/assets/i18n.js"></script>
+<script src="/vendor/qr.js"></script>
+<script src="/assets/fish-frame.js"></script>
+<script src="/assets/fish-thumbs.js"></script>
+<script src="/assets/fish-glb.js"></script>
+<script src="/assets/painted-uv.js"></script>
+<script src="/assets/steering.js"></script>
+<script src="/assets/modal.js"></script>
+<script src="/assets/tank.js"></script>
+<script src="/assets/world-page.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ── объём полёта ─────────────────────────────────────────────────────────
+  // Та же пирамида обзора, что в саду: границы совпадают с кадром. Внизу
+  // кадра — планета, поэтому ниже FLIGHT_MIN корабли не опускаются: сфера
+  // планеты подобрана так, что на любой глубине её верх ниже этой высоты.
+  var Z_NEAR = 5, Z_FAR = -14;
+  var FLIGHT_MIN = 1.0;
+  var MARGIN = 1.4, WALL = 5;
+  var CAM_POS = [0, 4.8, 15.5], CAM_TARGET = [0, 4.8, 0];
+  var FOV = 42;
+  var TAN_HALF_FOV = Math.tan(FOV / 2 * Math.PI / 180);
+
+  function limitsAt(z) {
+    var d = CAM_POS[2] - z;
+    var half = d * TAN_HALF_FOV;
+    var aspect = camera ? camera.aspect : innerWidth / innerHeight;
+    var yc = CAM_TARGET[1];
+    return {
+      hw: half * aspect + MARGIN,
+      yTop: yc + half + MARGIN,
+      yBot: Math.max(FLIGHT_MIN, yc - half - MARGIN)
+    };
+  }
+
+  var renderer, scene, camera, clock;
+  var ships = [];
+  var planet, clouds;
+
+  // ── характеры кораблей ───────────────────────────────────────────────────
+  // speed — крейсерская, drift — вес блуждания (инерция: меньше, чем у
+  // насекомых), bank — сила крена в поворотах, exhaust — конус выхлопа,
+  // spin — вращение вокруг продольной оси (спутник), beacon — маячок.
+  var KINDS = {
+    rocket:    { speed: 2.4, drift: 0.6, bank: 0.55, exhaust: 1.0 },
+    spaceship: { speed: 1.9, drift: 0.8, bank: 0.7,  exhaust: 0.7 },
+    satellite: { speed: 0.8, drift: 0.4, bank: 0.2,  exhaust: 0,  spin: 0.25, beacon: true }
+  };
+  var KIND_DEFAULT = { speed: 1.8, drift: 0.7, bank: 0.5, exhaust: 0.7 };
+
+  // ── шаблоны видов ────────────────────────────────────────────────────────
+  // Как в саду: модель одна на вид, каждый экземпляр — клон с планарной UV
+  // по рамке листа (ракеты — side, спутник — top).
+  var templates = {}, templateQueue = {};
+
+  function withTemplate(info, cb) {
+    if (templates[info.name]) return cb(templates[info.name]);
+    if (templateQueue[info.name]) return templateQueue[info.name].push(cb);
+    templateQueue[info.name] = [cb];
+    var spec = { url: info.model, length: info.length, frame: info.frame };
+    FishGLB.load([spec], function () {
+      var t = null;
+      if (spec.gltf) {
+        var clone = spec.gltf.scene;
+        // У части моделей нормалей нет вовсе (конвертация из OBJ) — без них
+        // MeshStandardMaterial рисует чёрный силуэт. Заодно запоминаем
+        // родные геометрии: applyPlanar перепишет UV под лист, а «готовым»
+        // экземплярам нужна была бы заводская развёртка.
+        var stockGeos = [];
+        clone.traverse(function (o) {
+          if (!o.isMesh) return;
+          if (!o.geometry.attributes.normal) o.geometry.computeVertexNormals();
+          stockGeos.push(o.geometry);
+        });
+        var pivot = new THREE.Group();
+        pivot.quaternion.copy(spec.info.quat);
+        pivot.scale.setScalar(spec.info.scale);
+        pivot.add(clone);
+        var holder = new THREE.Group();
+        holder.add(pivot);
+        PaintedUV.applyPlanar(holder, info.projection || 'side');
+        holder.remove(pivot);
+
+        // хвост в единицах сцены — туда ставится конус выхлопа
+        var box = new THREE.Box3().setFromObject(pivot);
+        t = { scene: clone, info: spec.info, tailZ: box.min.z, stockGeos: stockGeos };
+        templates[info.name] = t;
+      }
+      templateQueue[info.name].forEach(function (fn) { fn(t); });
+      delete templateQueue[info.name];
+    });
+    return null;
+  }
+
+  // ── выхлоп и маячок ──────────────────────────────────────────────────────
+  // Дёшево и сердито: два вложенных конуса аддитивом, никаких частиц и
+  // источников света на экземпляр. Пульсируют в animate через userData.
+  function makeExhaust(tailZ, len, strength) {
+    var g = new THREE.Group();
+    var mkCone = function (l, r, color, opacity) {
+      var geo = new THREE.ConeGeometry(r, l, 10, 1, true);
+      var mat = new THREE.MeshBasicMaterial({
+        color: color, transparent: true, opacity: opacity,
+        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide
+      });
+      var cone = new THREE.Mesh(geo, mat);
+      cone.rotation.x = -Math.PI / 2;       // остриё в -Z, назад от сопла
+      cone.position.z = -l / 2;
+      return cone;
+    };
+    var outer = mkCone(len, len * 0.22, 0xff8c3a, 0.55 * strength);
+    var inner = mkCone(len * 0.6, len * 0.12, 0xfff3c8, 0.8 * strength);
+    g.add(outer); g.add(inner);
+    g.position.z = tailZ + 0.02;
+    return g;
+  }
+
+  // ── корабль ──────────────────────────────────────────────────────────────
+  function Ship(info, tpl, tex, size) {
+    var kindP = KINDS[info.name] || KIND_DEFAULT;
+    this.p = kindP;
+    this.len = info.length * (size || 1);
+    this.phase = Math.random() * 6.28;
+
+    var clone = tpl.scene.clone(true);
+    this.spinner = clone;
+    var pivot = new THREE.Group();
+    pivot.quaternion.copy(tpl.info.quat);
+    pivot.scale.setScalar(tpl.info.scale * (size || 1));
+    pivot.add(clone);
+
+    var meshIndex = 0;
+    clone.traverse(function (o) {
+      if (!o.isMesh) return;
+      var mat;
+      if (tex) {
+        mat = new THREE.MeshStandardMaterial({
+          map: tex, roughness: 0.6, metalness: 0.05, side: THREE.DoubleSide
+        });
+      } else {
+        // Без детского рисунка — заводская текстура и родная развёртка.
+        o.geometry = tpl.stockGeos[meshIndex];
+        mat = o.material.clone();
+        mat.side = THREE.DoubleSide;
+      }
+      meshIndex++;
+      o.material = mat;
+    });
+
+    this.mesh = new THREE.Group();
+    this.mesh.add(pivot);
+
+    if (kindP.exhaust) {
+      this.exhaust = makeExhaust(tpl.tailZ * (size || 1), this.len * 0.45, kindP.exhaust);
+      this.mesh.add(this.exhaust);
+    }
+    if (kindP.beacon) {
+      var dot = new THREE.Mesh(
+        new THREE.SphereGeometry(0.045, 8, 8),
+        new THREE.MeshBasicMaterial({ color: 0xff4444 })
+      );
+      dot.position.z = this.len * 0.52;
+      this.beacon = dot;
+      this.mesh.add(dot);
+    }
+
+    var z0 = Z_FAR + Math.random() * (Z_NEAR - Z_FAR);
+    var l0 = limitsAt(z0);
+    this.pos = new THREE.Vector3(
+      (Math.random() * 2 - 1) * Math.max(0.5, l0.hw - MARGIN),
+      l0.yBot + MARGIN + Math.random() * Math.max(0.5, l0.yTop - l0.yBot - MARGIN * 2),
+      z0
+    );
+    this.speed = kindP.speed * (0.85 + Math.random() * 0.3);
+    this.vel = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5)
+      .normalize().multiplyScalar(this.speed);
+    this.heading = Math.atan2(this.vel.x, this.vel.z);
+    this.roll = 0;
+    this.nextTurn = 0;
+    scene.add(this.mesh);
+  }
+
+  var _a = new THREE.Vector3(), _look = new THREE.Vector3();
+
+  Ship.prototype.update = function (dt, t) {
+    _a.set(0, 0, 0);
+    // Блуждание мягче, чем у насекомых, и без вертикальной качки — в
+    // невесомости корабль плывёт ровно, курс меняется редко и плавно.
+    Steering.wander(_a, t, this.phase, this.p.drift);
+    if (t > this.nextTurn) {
+      this.nextTurn = t + 4 + Math.random() * 5;
+      this.vel.x += (Math.random() - 0.5) * this.p.drift * 1.6;
+      this.vel.y += (Math.random() - 0.5) * this.p.drift * 0.7;
+      this.vel.z += (Math.random() - 0.5) * this.p.drift * 1.6;
+    }
+    Steering.confine(_a, this.pos, limitsAt(this.pos.z), Z_NEAR, Z_FAR, MARGIN, WALL);
+    Steering.step(this, _a, dt);
+
+    // Нос по ходу без крутых пикирований, плюс крен в поворотах: чем резче
+    // меняется курс, тем сильнее корабль ложится на крыло.
+    _look.copy(this.vel);
+    _look.y *= 0.5;
+    if (_look.lengthSq() < 1e-6) _look.set(0, 0, 1);
+    this.mesh.position.copy(this.pos);
+    this.mesh.lookAt(_look.add(this.pos));
+
+    var heading = Math.atan2(this.vel.x, this.vel.z);
+    var dYaw = heading - this.heading;
+    if (dYaw > Math.PI) dYaw -= Math.PI * 2;
+    if (dYaw < -Math.PI) dYaw += Math.PI * 2;
+    this.heading = heading;
+    var targetRoll = THREE.MathUtils.clamp(-dYaw / Math.max(dt, 1e-3) * this.p.bank, -0.6, 0.6);
+    this.roll += (targetRoll - this.roll) * Math.min(1, dt * 3);
+    this.mesh.rotateZ(this.roll);
+
+    if (this.p.spin) this.spinner.rotation.z += this.p.spin * dt;
+    if (this.exhaust) {
+      var pulse = 1 + 0.25 * Math.sin(t * 21 + this.phase * 3);
+      this.exhaust.scale.set(1, 1, pulse);
+    }
+    if (this.beacon) this.beacon.visible = Math.sin(t * 3 + this.phase) > 0;
+  };
+
+  // ── окружение: планета, облака, звёзды ───────────────────────────────────
+  // Фонов-картинок у космоса нет (как у футбола) — всё рисуем сами: текстуры
+  // планеты и облаков собираются канвасом с фиксированным зерном, чтобы
+  // планета у всех была одна и та же.
+  function mulberry32(seed) {
+    return function () {
+      seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+      var x = Math.imul(seed ^ seed >>> 15, 1 | seed);
+      x = x + Math.imul(x ^ x >>> 7, 61 | x) ^ x;
+      return ((x ^ x >>> 14) >>> 0) / 4294967296;
+    };
+  }
+
+  function planetTexture() {
+    var w = 1024, h = 512;
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var g = c.getContext('2d');
+    var rnd = mulberry32(20260829);
+
+    // океан: градиент от экватора к полюсам
+    var sea = g.createLinearGradient(0, 0, 0, h);
+    sea.addColorStop(0, '#2f6f9f');
+    sea.addColorStop(0.5, '#2a7fbf');
+    sea.addColorStop(1, '#2f6f9f');
+    g.fillStyle = sea;
+    g.fillRect(0, 0, w, h);
+
+    // континенты: кляксы из перекрывающихся кругов
+    var greens = ['#4d9950', '#5aa057', '#7fae5a', '#c9b077'];
+    for (var i = 0; i < 11; i++) {
+      var cx = rnd() * w, cy = h * (0.18 + rnd() * 0.64);
+      var color = greens[(rnd() * greens.length) | 0];
+      var blobs = 6 + (rnd() * 8) | 0;
+      for (var b = 0; b < blobs; b++) {
+        var r = 18 + rnd() * 42;
+        var x = cx + (rnd() - 0.5) * 150, y = cy + (rnd() - 0.5) * 80;
+        g.fillStyle = color;
+        g.beginPath();
+        g.arc(x, y, r, 0, 6.29);
+        g.fill();
+        // текстура шва по экватору u=0/1: дублируем кляксу с обеих сторон
+        g.beginPath();
+        g.arc(x < w / 2 ? x + w : x - w, y, r, 0, 6.29);
+        g.fill();
+      }
+    }
+
+    // полярные шапки
+    g.fillStyle = 'rgba(240,248,255,0.9)';
+    g.fillRect(0, 0, w, 26);
+    g.fillRect(0, h - 26, w, 26);
+
+    var tex = new THREE.CanvasTexture(c);
+    tex.encoding = THREE.sRGBEncoding;
+    return tex;
+  }
+
+  function cloudTexture() {
+    var w = 1024, h = 512;
+    var c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    var g = c.getContext('2d');
+    var rnd = mulberry32(4242);
+    for (var i = 0; i < 90; i++) {
+      var x = rnd() * w, y = h * (0.1 + rnd() * 0.8);
+      var r = 12 + rnd() * 34;
+      var grad = g.createRadialGradient(x, y, 0, x, y, r);
+      grad.addColorStop(0, 'rgba(255,255,255,0.55)');
+      grad.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(x, y, r, 0, 6.29);
+      g.fill();
+    }
+    return new THREE.CanvasTexture(c);
+  }
+
+  function makeStars(count, size, radius) {
+    var pos = new Float32Array(count * 3);
+    var rnd = mulberry32(777 + count);
+    for (var i = 0; i < count; i++) {
+      // случайные точки на сфере вокруг сцены
+      var u = rnd() * 2 - 1, a = rnd() * 6.2832;
+      var s = Math.sqrt(1 - u * u);
+      pos[i * 3] = radius * s * Math.cos(a);
+      pos[i * 3 + 1] = radius * u;
+      pos[i * 3 + 2] = radius * s * Math.sin(a);
+    }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    var mat = new THREE.PointsMaterial({
+      color: 0xffffff, size: size, sizeAttenuation: false,
+      transparent: true, opacity: 0.9, depthWrite: false
+    });
+    return new THREE.Points(geo, mat);
+  }
+
+  function buildEnvironment() {
+    scene.background = new THREE.Color(0x050a18);
+
+    scene.add(makeStars(600, 1.6, 90));
+    scene.add(makeStars(80, 3.0, 88));
+
+    // Планета: сфера внизу кадра. Полюса кладём по оси взгляда (иначе камера
+    // смотрит ровно на полярную шапку и видит белый блин), а суточное
+    // вращение делаем вокруг собственного полюса — rotateY в animate.
+    var R = 42;
+    planet = new THREE.Mesh(
+      new THREE.SphereGeometry(R, 96, 64),
+      new THREE.MeshStandardMaterial({ map: planetTexture(), roughness: 1, metalness: 0 })
+    );
+    planet.position.set(0, -44, -20);
+    planet.rotation.x = -Math.PI / 2;
+    scene.add(planet);
+
+    // Облака — тонкой плёнкой: у толстой на ребре сферы копится альфа и по
+    // краю диска рисуется серое кольцо.
+    clouds = new THREE.Mesh(
+      new THREE.SphereGeometry(R + 0.25, 96, 64),
+      new THREE.MeshStandardMaterial({
+        map: cloudTexture(), transparent: true, opacity: 0.8,
+        roughness: 1, depthWrite: false
+      })
+    );
+    clouds.position.copy(planet.position);
+    clouds.rotation.x = -Math.PI / 2;
+    scene.add(clouds);
+
+    // Атмосфера — тонкий ярко-голубой ободок по краю диска. Широкий и
+    // полупрозрачный смотрелся грязным серым кольцом: у BackSide-сферы края
+    // резкие, так что ободок делаем узким и явным — под стать low-poly стилю.
+    var glow = new THREE.Mesh(
+      new THREE.SphereGeometry(R + 0.55, 96, 64),
+      new THREE.MeshBasicMaterial({
+        color: 0x9fd8ff, side: THREE.BackSide, transparent: true,
+        opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false
+      })
+    );
+    glow.position.copy(planet.position);
+    scene.add(glow);
+
+    // Свет: «солнце» сбоку-сверху плюс мягкая подсветка, чтобы детская
+    // раскраска на корпусе читалась даже на тёмной стороне.
+    scene.add(new THREE.HemisphereLight(0x9db8e8, 0x1a2438, 0.55));
+    var sun = new THREE.DirectionalLight(0xfff4e0, 1.15);
+    sun.position.set(18, 26, 10);
+    scene.add(sun);
+  }
+
+  // ── сцена ────────────────────────────────────────────────────────────────
+  function init() {
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 1.75));
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.outputEncoding = THREE.sRGBEncoding;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.05;
+    document.body.appendChild(renderer.domElement);
+
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(FOV, innerWidth / innerHeight, 0.1, 200);
+    camera.position.set(CAM_POS[0], CAM_POS[1], CAM_POS[2]);
+    camera.lookAt(CAM_TARGET[0], CAM_TARGET[1], CAM_TARGET[2]);
+    clock = new THREE.Clock();
+
+    buildEnvironment();
+    document.getElementById('loading').hidden = true;
+
+    WorldPage.attachShots(renderer, scene, camera, clock);
+    WorldPage.wantShot(3.5);
+    addEventListener('resize', onResize);
+    animate();
+  }
+
+  function onResize() {
+    camera.aspect = innerWidth / innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  }
+
+  function animate() {
+    requestAnimationFrame(animate);
+    var dt = Math.min(clock.getDelta(), 0.05);
+    var t = clock.elapsedTime;
+    FishGLB.uTime.value = t;
+    for (var i = 0; i < ships.length; i++) ships[i].update(dt, t);
+    planet.rotateY(dt * 0.012);
+    clouds.rotateY(dt * 0.019);
+    renderer.render(scene, camera);
+    WorldPage.tickShots(t);
+  }
+
+  WorldPage.boot({
+    world: 'space',
+    counter: 'ships',
+    hooks: {
+      init: init,
+      spawnPainted: function (item, info, tex, done) {
+        withTemplate(info, function (tpl) {
+          if (!tpl) return done(null);
+          if (tex) {
+            tex.encoding = THREE.sRGBEncoding;
+            tex.flipY = true;
+          }
+          var ship = new Ship(info, tpl, tex, item.size);
+          ships.push(ship);
+          done(ship);
+        });
+      },
+      removePainted: function (ship) {
+        scene.remove(ship.mesh);
+        var i = ships.indexOf(ship);
+        if (i !== -1) ships.splice(i, 1);
+      }
+    }
+  });
+})();
+</script>
+</body>
+</html>

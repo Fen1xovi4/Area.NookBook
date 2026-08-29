@@ -309,9 +309,10 @@
   var WORLDS = [
     { key: 'aquarium', ico: '🐠', step0: '🌊', empty: '🫧' },
     { key: 'garden',   ico: '🦋', step0: '🌱', empty: '🌼' },
-    { key: 'football', ico: '⚽', step0: '⚽', empty: '🥅' }
+    { key: 'football', ico: '⚽', step0: '⚽', empty: '🥅' },
+    { key: 'space',    ico: '🚀', step0: '🚀', empty: '🪐' }
   ];
-  var COUNTERS = { aquarium: 'fish', garden: 'insects', football: 'players' };
+  var COUNTERS = { aquarium: 'fish', garden: 'insects', football: 'players', space: 'ships' };
   var world = 'aquarium';
   try {
     var savedWorld = localStorage.getItem(WORLD_KEY);

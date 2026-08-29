@@ -17,5 +17,8 @@
   { "name": "ladybug",                "title": "Божья коровка",     "url": "/assets/models/garden/ladybug/ladybug.gltf",                             "projection": "top",  "world": "garden", "frame": "identity" },
   { "name": "bee",                    "title": "Шмель",             "url": "/assets/models/garden/bee/bee.gltf",                                     "projection": "top",  "world": "garden", "frame": "identity" },
   { "name": "dragonfly",              "title": "Стрекоза",          "url": "/assets/models/garden/dragonfly/dragonfly.gltf",                         "projection": "top",  "world": "garden", "frame": "identity" },
-  { "name": "footballer",             "title": "Футболист",         "url": "/assets/models/football/footballer/footballer.gltf",                     "projection": "front", "world": "football", "frame": "identity" }
+  { "name": "footballer",             "title": "Футболист",         "url": "/assets/models/football/footballer/footballer.gltf",                     "projection": "front", "world": "football", "frame": "identity" },
+  { "name": "rocket",                 "title": "Ракета",            "url": "/assets/models/space/rocket/rocket.gltf",                                "projection": "side", "world": "space", "frame": "identity" },
+  { "name": "spaceship",              "title": "Космический корабль", "url": "/assets/models/space/spaceship/spaceship.gltf",                        "projection": "side", "world": "space", "frame": "identity" },
+  { "name": "satellite",              "title": "Спутник",           "url": "/assets/models/space/satellite/satellite.gltf",                          "projection": "top",  "world": "space", "frame": "identity" }
 ]
