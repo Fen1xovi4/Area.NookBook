@@ -134,7 +134,8 @@
       0,
       FIELD.zFar + 1 + Math.random() * (FIELD.zNear - FIELD.zFar - 2)
     );
-    this.speed = 2.0 + Math.random() * 0.7;
+    this.baseSpeed = 2.0 + Math.random() * 0.7;
+    this.speed = this.baseSpeed;
     this.vel = new THREE.Vector3(Math.random() - 0.5, 0, Math.random() - 0.5)
       .normalize().multiplyScalar(this.speed);
     scene.add(this.mesh);
@@ -189,6 +190,10 @@
     if (this.pos.z > FIELD.zNear - MARGIN) _a.z -= WALL;
     if (this.pos.z < FIELD.zFar + MARGIN) _a.z += WALL;
 
+    // Скорость медленно «дышит»: с постоянной скоростью чуть более быстрый
+    // игрок всегда первый у мяча, и весь матч бьёт только он — в одни ворота.
+    this.speed = this.baseSpeed + Math.sin(t * 0.11 + this.phase * 2.3) * 0.45;
+
     this.vel.y = 0;
     Steering.step(this, _a, dt);
     this.pos.y = 0;
@@ -202,21 +207,21 @@
     // Темп бега — от скорости: шагов на метр примерно поровну.
     this.mixer.update(dt * Math.max(0.4, Math.min(1.8, this.vel.length() / 2.2)));
 
-    // Удар: мяч рядом — толкаем вперёд с разбросом, к чужим воротам чаще.
+    // Удар: мяч рядом — толкаем вперёд с разбросом, к воротам-цели чаще.
+    // Прицел нормирован по расстоянию: старый множитель (gx − x) таял у самых
+    // ворот, и добить мяч в створ вблизи было нечем — голы выходили случайными.
     if (ball && t > ball.noKickUntil) {
       var bd = this.pos.distanceTo(ball.pos);
       if (bd < this.height * 0.55) {
         var dir = _d.set(this.vel.x, 0, this.vel.z).normalize();
-        // лёгкий прицел в сторону ворот соперника
         var gx = this.team === 'red' ? GOAL.x : -GOAL.x;
-        dir.x += (gx - ball.pos.x) * 0.045;
-        dir.z += (0 - ball.pos.z) * 0.03;
-        dir.x += (Math.random() - 0.5) * 0.8;
-        dir.z += (Math.random() - 0.5) * 0.8;
+        var ax = gx - ball.pos.x, az = -ball.pos.z;
+        var al = Math.sqrt(ax * ax + az * az) || 1;
+        dir.x += ax / al * 0.9 + (Math.random() - 0.5) * 0.8;
+        dir.z += az / al * 0.9 + (Math.random() - 0.5) * 0.8;
         dir.normalize();
         ball.vel.copy(dir).multiplyScalar(6 + Math.random() * 5);
         ball.noKickUntil = t + 0.4;
-        ball.lastTeam = this.team;
       }
     }
   };
@@ -254,8 +259,7 @@
       mesh: mesh, r: r,
       pos: new THREE.Vector3(0, r, 0),
       vel: new THREE.Vector3(0, 0, 0),
-      noKickUntil: 0,
-      lastTeam: null
+      noKickUntil: 0
     };
   }
 
@@ -268,12 +272,15 @@
     ball.vel.multiplyScalar(Math.pow(0.35, dt));    // трение газона
     ball.pos.addScaledVector(ball.vel, dt);
 
-    // Гол? Мяч уходит за линию в створе. После гола ворота ненадолго
-    // «закрыты» — мяч отскакивает, чтобы табло не крутилось как счётчик.
+    // Гол? Мяч уходит за линию в створе. Очко — по воротам, а не по тому, кто
+    // коснулся последним: правые ворота — цель красных, левые — синих, а мяч,
+    // срезанный в свои, — очко сопернику, как в настоящем футболе. После гола
+    // ворота ненадолго «закрыты» — мяч отскакивает, чтобы табло не крутилось
+    // как счётчик.
     if (Math.abs(ball.pos.x) > GOAL.x - ball.r) {
       var inMouth = Math.abs(ball.pos.z) < GOAL.halfZ;
-      if (inMouth && t > goalClosedUntil && ball.lastTeam) {
-        goalScored(ball.lastTeam, t);
+      if (inMouth && t > goalClosedUntil) {
+        goalScored(ball.pos.x > 0 ? 'red' : 'blue', t);
       } else {
         ball.pos.x = Math.sign(ball.pos.x) * (GOAL.x - ball.r);
         ball.vel.x *= -0.55;
@@ -290,12 +297,20 @@
       ball.mesh.rotateOnWorldAxis(_d, sp * dt / ball.r);
     }
 
-    // назначить преследователей: двое ближайших
+    // назначить преследователей: ближайший из каждой команды — обязательно
+    // (иначе большинство не подпускает меньшинство к мячу, и одни ворота
+    // простаивают весь матч), дальше добираем просто ближайшими — до трёх
     var byDist = players.slice().sort(function (a, b) {
       return a.pos.distanceTo(ball.pos) - b.pos.distanceTo(ball.pos);
     });
     players.forEach(function (p) { p.chasing = false; });
-    byDist.slice(0, Math.min(3, byDist.length)).forEach(function (p) { p.chasing = true; });
+    var picked = 0, seen = { red: false, blue: false };
+    byDist.forEach(function (p) {
+      if (!seen[p.team]) { seen[p.team] = true; p.chasing = true; picked++; }
+    });
+    byDist.forEach(function (p) {
+      if (picked < 3 && !p.chasing) { p.chasing = true; picked++; }
+    });
   }
 
   // ── гол ──────────────────────────────────────────────────────────────────
@@ -308,7 +323,6 @@
     celebrating = t + 2.6;
     celebratingTeam = team;
     resetBall();
-    ball.lastTeam = null;
 
     var flash = document.createElement('div');
     flash.className = 'goalflash ' + team;

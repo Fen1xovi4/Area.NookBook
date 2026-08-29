@@ -156,6 +156,15 @@
   .teamrow button.blue { background: #2f6fc4; }
   .teamrow button[aria-pressed="true"] { opacity: 1; border-color: #fff; }
 
+  /* Номер на майке: необязательное поле, пустое — майка без номера. */
+  .numrow { margin-top: 8px; }
+  .numrow input {
+    width: 130px; font: inherit; font-size: 20px; font-weight: 700; color: #fff;
+    text-align: center; padding: 10px; border-radius: 14px;
+    background: #0a2233; border: 1px solid rgba(140, 200, 255, 0.35);
+  }
+  .numrow input::placeholder { color: var(--muted); font-weight: 400; font-size: 15px; }
+
   /* Овальное кадрирование лица: фото двигают пальцем, приближают ползунком. */
   .facewrap { position: relative; width: 100%; max-width: 340px; margin: 10px auto 0; }
   .facewrap canvas {
@@ -234,6 +243,10 @@
   <div class="teamrow" id="teamrow" hidden>
     <button type="button" class="red" id="team-red" data-t="cap.team.red"></button>
     <button type="button" class="blue" id="team-blue" data-t="cap.team.blue"></button>
+  </div>
+  <p class="teamlabel" id="num-label" data-t="cap.number" hidden></p>
+  <div class="numrow" id="numrow" hidden>
+    <input type="number" id="kit-number" inputmode="numeric" min="0" max="99" data-t-ph="cap.number.ph">
   </div>
   <button class="big green" id="b-release" data-t="cap.release"></button>
   <label class="big ghost" for="file" data-t="cap.retake"></label>
@@ -572,6 +585,7 @@
       // размер каждой новой рыбки — обычный, ползунок в середину
       document.getElementById('size').value = 100;
       showTeamRow();
+      if (WORLD === 'football' && r.boost) armNumberOverlay(r.boost);
       show('s-preview');
       show3D(r.kind);
       return r;
@@ -599,7 +613,13 @@
     document.getElementById('teamrow').hidden = !on;
     document.getElementById('team-label').hidden = !on;
     if (on) renderTeam();
+    document.getElementById('numrow').hidden = !on;
+    document.getElementById('num-label').hidden = !on;
   }
+    // Команда — общая на серию съёмок, а номер у каждого игрока свой:
+    // к новому превью поле начинается пустым.
+    kitNumber = null;
+    numEl.value = '';
 
   ['red', 'blue'].forEach(function (t) {
     document.getElementById('team-' + t).addEventListener('click', function () {
@@ -613,6 +633,58 @@
   });
 
   // Живая подстройка: пиксели пересчитываются из сырой копии, 3D-текстура
+  // ── номер на майке (футбол) ──────────────────────────────────────────────
+  // Номер не отдельное поле записи, а часть текстуры: рисуется на груди
+  // (планарная UV «анфас» покажет его и на спине — зеркально) и уезжает на
+  // сервер уже запечённым, поэтому ни server.js, ни football.html его не знают.
+  var kitNumber = null;   // 0..99 или null — майка без номера
+  var numEl = document.getElementById('kit-number');
+
+  function drawKitNumber(c) {
+    if (kitNumber === null) return;
+    var ctx = c.getContext('2d');
+    // Доли — от высоты кропа листа: центр груди зоны KIT_ZONES.shirt.
+    var size = c.height * 0.15;
+    ctx.save();
+    ctx.font = '700 ' + size.toFixed(0) + 'px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = size * 0.14;
+    ctx.strokeStyle = 'rgba(15, 20, 30, 0.9)';
+    ctx.strokeText(String(kitNumber), c.width / 2, c.height * 0.35);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(String(kitNumber), c.width / 2, c.height * 0.35);
+    ctx.restore();
+  }
+
+  // Раскрашенный лист: boost.set() каждый раз перерисовывает канвас целиком
+  // из сырых пикселей — номер дорисовываем следом, обернув set. bake() отдаёт
+  // канвас как есть, так что в отправку номер попадает сам.
+  function armNumberOverlay(boost) {
+    var set0 = boost.set;
+    boost.set = function (v) {
+      set0(v);
+      drawKitNumber(boost.texCanvas);
+      drawKitNumber(boost.pvCanvas);
+    };
+  }
+
+  numEl.addEventListener('input', function () {
+    var v = parseInt(this.value, 10);
+    kitNumber = isNaN(v) ? null : Math.max(0, Math.min(99, v));
+    if (kitNumber !== null && this.value !== String(kitNumber)) this.value = kitNumber;
+    if (!result) return;
+    if (result.faceMode) refreshFaceTexture();
+    else if (result.boost) {
+      // перерисовать базу (иначе цифры наслаиваются) и номер поверх
+      result.boost.set(result.boost.value);
+      if (P3.mesh && P3.mesh.material.map) P3.mesh.material.map.needsUpdate = true;
+      var flat = document.getElementById('p-img');
+      if (!flat.hidden) flat.src = result.boost.pvCanvas.toDataURL('image/png');
+    }
+  });
+
   // обновляется через needsUpdate. Во время протяжки события схлопывает
   // rAF-затвор, но rAF — только оптимизация: в перекрытой вкладке Chrome
   // его замораживает, поэтому отпускание ползунка ('change') и отправка
@@ -862,6 +934,7 @@
     var src = composePlayer(result.info, KIT[team], faceOvalCanvas());
     result.texCanvas.getContext('2d').drawImage(src, 0, 0);
     if (P3.mesh && P3.mesh.material.map) P3.mesh.material.map.needsUpdate = true;
+    drawKitNumber(result.texCanvas);
     var flat = document.getElementById('p-img');
     if (!flat.hidden) flat.src = result.texCanvas.toDataURL('image/png');
   }

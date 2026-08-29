@@ -319,6 +319,8 @@
       'adm.bg.err.read': 'не удалось прочитать файл',
       'adm.bg.err.img': 'это не картинка',
       'adm.fish.count': 'рыбок: {n}',
+      'cap.number': 'Какой номер на майке?',
+      'cap.number.ph': 'без номера',
       'adm.fish.pack': 'из набора · ',
       'adm.fish.del': 'Удалить',
       'adm.fish.del.title': 'Удалить рыбку?',
@@ -679,6 +681,8 @@
       'print.nomanifest': 'manifest.json did not load — check that the server is running.',
 
       'pass.ask.title': 'Aquarium password',
+      'cap.number': 'Number on the shirt?',
+      'cap.number.ph': 'no number',
       'pass.ask.text': 'The password is only asked for managing. Watching the aquarium needs none.',
       'pass.ask.ph': 'for example, 481902',
       'pass.ask.ok': 'Enter',
@@ -1036,6 +1040,8 @@
       players: ['piłkarz', 'piłkarze', 'piłkarzy']
     },
     en: {
+      'cap.number': 'Jaki numer na koszulce?',
+      'cap.number.ph': 'bez numeru',
       fish: ['fish', 'fish', 'fish'],
       insects: ['insect', 'insects', 'insects'],
       players: ['player', 'players', 'players']
