@@ -54,7 +54,7 @@
 
   var renderer, scene, camera, clock;
   var ships = [];
-  var planet, clouds;
+  var planet, clouds, envGroup;
 
   // ── характеры кораблей ───────────────────────────────────────────────────
   // speed — крейсерская, drift — вес блуждания (инерция: меньше, чем у
@@ -241,9 +241,10 @@
   };
 
   // ── окружение: планета, облака, звёзды ───────────────────────────────────
-  // Фонов-картинок у космоса нет (как у футбола) — всё рисуем сами: текстуры
-  // планеты и облаков собираются канвасом с фиксированным зерном, чтобы
-  // планета у всех была одна и та же.
+  // Два режима, как в саду: если в настройках выбран фон-картинка, она встаёт
+  // на scene.background (cover), а процедурная планета со звёздами прячется.
+  // Без фона — рисуем всё сами: текстуры планеты и облаков собираются
+  // канвасом с фиксированным зерном, чтобы планета у всех была одна и та же.
   function mulberry32(seed) {
     return function () {
       seed |= 0; seed = seed + 0x6D2B79F5 | 0;
@@ -338,11 +339,51 @@
     return new THREE.Points(geo, mat);
   }
 
+  // Фон-картинка из настроек (выбирается в админке). Кадрируем в режиме
+  // cover через repeat/offset — шейдер фона уважает матрицу текстуры.
+  var appliedBg;    // undefined = ещё не применяли
+
+  function applyBackground(url) {
+    if (url === appliedBg) return;
+    appliedBg = url;
+    if (!url) {
+      envGroup.visible = true;
+      scene.background = new THREE.Color(0x050a18);
+      return;
+    }
+    new THREE.TextureLoader().load(url, function (tex) {
+      if (appliedBg !== url) return;   // пока грузилась, выбрали другую
+      tex.encoding = THREE.sRGBEncoding;
+      scene.background = tex;
+      envGroup.visible = false;        // на картинке уже есть и планеты, и звёзды
+      fitBackground();
+      WorldPage.wantShot(1);
+    });
+  }
+
+  function fitBackground() {
+    var tex = scene.background;
+    if (!tex || !tex.isTexture || !tex.image || !tex.image.width) return;
+    var screenAspect = innerWidth / innerHeight;
+    var imageAspect = tex.image.width / tex.image.height;
+    if (screenAspect > imageAspect) {
+      var ry = imageAspect / screenAspect;
+      tex.repeat.set(1, ry);
+      tex.offset.set(0, (1 - ry) / 2);
+    } else {
+      var rx = screenAspect / imageAspect;
+      tex.repeat.set(rx, 1);
+      tex.offset.set((1 - rx) / 2, 0);
+    }
+  }
+
   function buildEnvironment() {
     scene.background = new THREE.Color(0x050a18);
+    envGroup = new THREE.Group();
+    scene.add(envGroup);
 
-    scene.add(makeStars(600, 1.6, 90));
-    scene.add(makeStars(80, 3.0, 88));
+    envGroup.add(makeStars(600, 1.6, 90));
+    envGroup.add(makeStars(80, 3.0, 88));
 
     // Планета: сфера внизу кадра. Полюса кладём по оси взгляда (иначе камера
     // смотрит ровно на полярную шапку и видит белый блин), а суточное
@@ -354,7 +395,7 @@
     );
     planet.position.set(0, -44, -20);
     planet.rotation.x = -Math.PI / 2;
-    scene.add(planet);
+    envGroup.add(planet);
 
     // Облака — тонкой плёнкой: у толстой на ребре сферы копится альфа и по
     // краю диска рисуется серое кольцо.
@@ -367,7 +408,7 @@
     );
     clouds.position.copy(planet.position);
     clouds.rotation.x = -Math.PI / 2;
-    scene.add(clouds);
+    envGroup.add(clouds);
 
     // Атмосфера — тонкий ярко-голубой ободок по краю диска. Широкий и
     // полупрозрачный смотрелся грязным серым кольцом: у BackSide-сферы края
@@ -380,10 +421,11 @@
       })
     );
     glow.position.copy(planet.position);
-    scene.add(glow);
+    envGroup.add(glow);
 
     // Свет: «солнце» сбоку-сверху плюс мягкая подсветка, чтобы детская
-    // раскраска на корпусе читалась даже на тёмной стороне.
+    // раскраска на корпусе читалась даже на тёмной стороне. Свет живёт в
+    // сцене, не в envGroup: корабли освещаются и при фоне-картинке.
     scene.add(new THREE.HemisphereLight(0x9db8e8, 0x1a2438, 0.55));
     var sun = new THREE.DirectionalLight(0xfff4e0, 1.15);
     sun.position.set(18, 26, 10);
@@ -419,6 +461,7 @@
     camera.aspect = innerWidth / innerHeight;
     camera.updateProjectionMatrix();
     renderer.setSize(innerWidth, innerHeight);
+    fitBackground();
   }
 
   function animate() {
@@ -454,6 +497,9 @@
         scene.remove(ship.mesh);
         var i = ships.indexOf(ship);
         if (i !== -1) ships.splice(i, 1);
+      },
+      onSettings: function (s) {
+        applyBackground(s.backgroundUrl || null);
       }
     }
   });

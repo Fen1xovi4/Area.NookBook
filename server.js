@@ -500,12 +500,12 @@ function readDirSafe(dir) {
   catch (e) { return []; }
 }
 
-// Встроенные фоны делятся по мирам именем файла: garden-*/football-* — свои
+// Встроенные фоны делятся по мирам именем файла: garden-*/space-* — свои
 // миры, остальное — аквариум (все старые фоны без префикса). Подводный риф
 // в саду и луг в аквариуме одинаково нелепы, поэтому чужие миры не видны
 // ни в выборе админки, ни в randomBackground().
 function builtinWorld(name) {
-  const m = /^(garden|football)-/.exec(name);
+  const m = /^(garden|football|space)-/.exec(name);
   return m ? m[1] : 'aquarium';
 }
 

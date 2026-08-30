@@ -36,8 +36,9 @@
   // Как в аквариуме, но без «покормить». «Готовый обитатель» и «фон» есть
   // не везде: у футбола окружение своё и игроки только раскрашенные —
   // эти два пункта показываются по табличкам ниже.
-  var HAS_PACK = { garden: true };   // готовые: виды манифеста со своей текстурой
-  var HAS_BG = { garden: true };     // фоны-картинки, как в аквариуме
+  var HAS_PACK = { garden: true, space: true };   // готовые: виды манифеста со своей текстурой
+  var HAS_BG = { garden: true, space: true };     // фоны-картинки, как в аквариуме
+  var PACK_ICO = { garden: '🦋', space: '🚀' };   // значок пункта и заглушка миниатюры
 
   function menuHtml() {
     return [
@@ -385,11 +386,12 @@
       grid.appendChild(b);
       // Миниатюры рисует общий рендерер из fish-thumbs.js; страница без него
       // (или без WebGL) обойдётся значком — кнопка работает и так.
-      if (!window.FishThumbs) { b.querySelector('.ph').textContent = '🦋'; return; }
+      var ico = PACK_ICO[opts.world] || '🐠';
+      if (!window.FishThumbs) { b.querySelector('.ph').textContent = ico; return; }
       FishThumbs.get({ name: name, url: info.model }, function (url) {
         var slot = b.querySelector('.ph');
         if (!slot) return;
-        if (!url) { slot.textContent = '🦋'; return; }
+        if (!url) { slot.textContent = ico; return; }
         var img = document.createElement('img');
         img.src = url;
         img.alt = '';
@@ -522,6 +524,7 @@
     if (HAS_PACK[opts.world]) {
       var packItem = document.getElementById('m-pack');
       packItem.hidden = false;
+      packItem.querySelector('.ico').textContent = PACK_ICO[opts.world] || '🐠';
       packItem.onclick = function () {
         showView('menu-pack', true);
         fillPack();

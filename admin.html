@@ -302,18 +302,17 @@
     .then(function (m) {
       if (!m) return;
       meta = m;
-      // Футбол и космос рисуют окружение сами — фонов-фотографий у них нет,
-      // показываем только обитателей (тот же режим, что ?only=fish).
-      // У аквариума и сада фон — картинка, им выбор фонов нужен.
-      var w = m.world || 'aquarium';
-      if (w === 'football' || w === 'space') document.body.classList.add('only-fish');
+      // Футбол рисует стадион сам — фонов-фотографий у него нет, показываем
+      // только игроков (тот же режим, что ?only=fish). У аквариума, сада и
+      // космоса фон — картинка, им выбор фонов нужен.
+      if ((m.world || 'aquarium') === 'football') document.body.classList.add('only-fish');
       // Подпись секции — под мир: меняем сам data-t, чтобы смена языка
       // продолжала переводить её правильно.
-      if (m.world === 'garden') {
+      if (m.world === 'garden' || m.world === 'space') {
         var bgLabel = document.querySelector('[data-t="adm.bg"]');
         if (bgLabel) {
-          bgLabel.setAttribute('data-t', 'adm.bg.garden');
-          bgLabel.textContent = I18N.t('adm.bg.garden');
+          bgLabel.setAttribute('data-t', 'adm.bg.' + m.world);
+          bgLabel.textContent = I18N.t('adm.bg.' + m.world);
         }
       }
       renderMeta();
