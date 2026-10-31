@@ -11,12 +11,25 @@
 # Сеть web общая и живёт отдельно от этого файла — её держит Traefik.
 # Проверить, что она на месте: docker network ls | grep web
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
+
 services:
   aqua:
+    logging: *default-logging
     build: .
     image: aqua:latest
     container_name: aqua
     restart: unless-stopped
+    # PID 1 внутри контейнера — настоящий init, а не node. Node подбирать
+    # чужих осиротевших потомков не умеет, и всё, что к нему переезжает,
+    # остаётся зомби до перезапуска. Своих потомков у сервера нет, но
+    # healthcheck выполняется внутри контейнера и при таймауте оставляет
+    # именно такую сироту.
+    init: true
     environment:
       # Пределы на случай, когда ссылку узнал кто-то лишний. Подробности —
       # в LIMITS в server.js.

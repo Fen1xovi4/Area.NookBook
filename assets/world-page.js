@@ -1,5 +1,5 @@
-/* Каркас страницы мира (сад, футбол): меню, доступ, «поделиться», опросы
-   сервера и снимок-превью. Сцену страница строит сама и отдаёт сюда хуки.
+/* Каркас страницы мира (сад, футбол, космос): меню, доступ, «поделиться»,
+   поток событий с сервера (запасной путь — редкие опросы) и снимок-превью. Сцену страница строит сама и отдаёт сюда хуки.
    Аквариум (realistic-tank.html) живёт своей копией этого кода — он в проде,
    и его не трогаем.
 
@@ -309,13 +309,21 @@
     else if (first && !hintSeen()) tapHint.hidden = false;
   }
 
-  // ── обитатели: опрос сервера ──────────────────────────────────────────────
+  // ── обитатели ────────────────────────────────────────────────────────────
   // Манифест раскрасок — единственный список видов; берём только свой мир.
   var specs = {};
   var seen = {};       // id записи → handle сцены (null, пока грузится)
 
+  // Разовый запрос списка: нужен сразу после того, как обитателя выпустили с
+  // этого же экрана, и как запасной опрос, когда поток событий недоступен.
   function pollPainted() {
-    fetch(Tank.api + '/fish').then(function (r) { return r.json(); }).then(function (list) {
+    fetch(Tank.api + '/fish').then(function (r) { return r.json(); })
+      .then(applyPainted)
+      .catch(function () { /* сервер без API — просто пусто */ });
+  }
+
+  // Сводит сцену с присланным списком: новых подселяет, пропавших убирает.
+  function applyPainted(list) {
       if (!Array.isArray(list)) return;
       setCount(list.length);
       var alive = {};
@@ -360,7 +368,6 @@
           });
         });
       });
-    }).catch(function () { /* сервер без API — просто пусто */ });
   }
 
   // ── «готовый обитатель»: виды манифеста со своей заводской текстурой ──────
@@ -425,21 +432,110 @@
         });
       })
       .catch(function () { console.error('не загрузился манифест раскрасок'); })
-      .then(function () {
-        pollPainted();
-        setInterval(pollPainted, 5000);
-      });
+      // Пока манифест не приехал, обитателей не подселяем: первый список
+      // отбросил бы их всех как «нет шаблона». Поэтому и поток событий, и
+      // опросы стартуют только отсюда.
+      .then(startUpdates);
   }
 
-  function initSettings() {
-    var poll = function () {
-      fetch(Tank.api + '/settings').then(function (r) { return r.json(); })
-        .then(function (s) { if (hooks.onSettings) hooks.onSettings(s); })
-        .catch(function () { /* без сервера настроек нет */ });
-    };
-    poll();
-    setInterval(poll, 3000);
+  function applySettings(s) {
+    if (hooks.onSettings) hooks.onSettings(s);
   }
+
+  function pollSettings() {
+    fetch(Tank.api + '/settings').then(function (r) { return r.json(); })
+      .then(applySettings)
+      .catch(function () { /* без сервера настроек нет */ });
+  }
+
+  // ── как экран узнаёт об изменениях ───────────────────────────────────────
+  // Раньше экран спрашивал сервер каждые 3 и 5 секунд, и сотня открытых
+  // экранов давала тысячи запросов в минуту с ответом «ничего нового».
+  // Основной путь — один поток событий (…/events, EventSource): сервер сам
+  // присылает settings и fish, когда они меняются, и снимок обоих при каждом
+  // подключении, так что после обрыва догонять нечего — браузер
+  // переподключается сам.
+  //
+  // Опросы остались как запасной путь, но редкие: для браузеров без
+  // EventSource, при отказе сервера (503 — слишком много экранов) и когда
+  // поток открылся, а снимок так и не пришёл — значит, между нами прокси,
+  // который копит ответ у себя. Из запасного режима раз в пять минут пробуем
+  // поток снова. Скрытая вкладка не держит ни поток, ни опросы.
+  // Та же схема, что в demos/realistic-tank.html.
+  var POLL_SETTINGS_MS = 15000, POLL_FISH_MS = 10000;
+  var LIVE_RETRY_MS = 5 * 60 * 1000, LIVE_SILENT_MS = 10000;
+  var live = null, pollTimers = [], liveRetry = null, liveWatch = null;
+
+  function startPolling() {
+    stopPolling();
+    pollSettings(); pollPainted();
+    pollTimers = [setInterval(pollSettings, POLL_SETTINGS_MS), setInterval(pollPainted, POLL_FISH_MS)];
+    if (window.EventSource && !liveRetry) {
+      liveRetry = setTimeout(function () { liveRetry = null; openLive(); }, LIVE_RETRY_MS);
+    }
+  }
+
+  function stopPolling() {
+    pollTimers.forEach(clearInterval);
+    pollTimers = [];
+  }
+
+  function openLive() {
+    if (live) return;
+    live = new EventSource(Tank.api + '/events');
+    live.addEventListener('settings', function (e) {
+      liveAlive();
+      try { applySettings(JSON.parse(e.data)); } catch (err) { /* битое событие — ждём следующего */ }
+    });
+    live.addEventListener('fish', function (e) {
+      liveAlive();
+      try { applyPainted(JSON.parse(e.data)); } catch (err) { /* битое событие — ждём следующего */ }
+    });
+    live.onopen = function () {
+      stopPolling();
+      // Сервер шлёт снимок сразу после подключения; открытый, но молчащий
+      // поток — сломанный, ждать его дальше бессмысленно.
+      clearTimeout(liveWatch);
+      liveWatch = setTimeout(giveUpLive, LIVE_SILENT_MS);
+    };
+    live.onerror = function () {
+      // CLOSED — браузер сдался сам (ответ не 200: 503 или пространства нет).
+      // Всё остальное он переживёт переподключением.
+      if (live && live.readyState === EventSource.CLOSED) giveUpLive();
+    };
+  }
+
+  function liveAlive() {
+    clearTimeout(liveWatch);
+    liveWatch = null;
+  }
+
+  function giveUpLive() {
+    closeLive();
+    startPolling();
+  }
+
+  function closeLive() {
+    liveAlive();
+    if (!live) return;
+    live.close();
+    live = null;
+  }
+
+  function startUpdates() {
+    if (document.hidden) return;
+    if (window.EventSource) openLive(); else startPolling();
+  }
+
+  function stopUpdates() {
+    closeLive();
+    stopPolling();
+    if (liveRetry) { clearTimeout(liveRetry); liveRetry = null; }
+  }
+
+  document.addEventListener('visibilitychange', function () {
+    if (document.hidden) stopUpdates(); else startUpdates();
+  });
 
   // ── снимок-превью для карточки на главной ─────────────────────────────────
   var SHOT_W = 480, SHOT_H = 270, SHOT_GAP = 10;
@@ -679,8 +775,7 @@
           fail(I18N.t('tank.crash', { msg: String(err && err.message || err) }));
           return;
         }
-        initPainted();
-        initSettings();
+        initPainted();   // заодно запускает поток событий, см. startUpdates()
       });
     }).catch(function () { fail(I18N.t('tank.noserver')); });
   }

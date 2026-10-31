@@ -41,6 +41,7 @@
 //   DELETE …/fish/<fid>            🔒 — удалить одну рыбку
 //   DELETE …/fish                  🔒 — очистить аквариум
 //   GET    …/settings                 — настройки сцены + метки событий
+//   GET    …/events                   — поток событий (SSE): settings и fish при изменении
 //   POST   …/settings {…}             — изменить настройки (фон)
 //   POST   …/feed                     — покормить
 //   GET    …/backgrounds              — фоны [{name, url, custom}]
@@ -86,28 +87,107 @@ function clientKey(req) {
   return fwd || req.socket.remoteAddress || '?';
 }
 
-// Сколько занимает data. Считаем не чаще раза в минуту: обход папки дешёвый,
-// но дёргать его на каждую загрузку картинки незачем.
+// Сколько занимает data. Обход папки когда-то был дешёвым, но растёт вместе
+// с ней: на десяти тысячах аквариумов это 41 000 папок и 147 000 файлов —
+// девять-двенадцать секунд, и всё это время синхронный обход держит event
+// loop. Раз в минуту, как было заведено, он съедал шестую часть ядра и ронял
+// каждый двадцатый запрос в десятисекундное ожидание.
+//
+// Поэтому считаем иначе: полный обход раз в сутки и асинхронный — между
+// файлами сервер успевает отвечать. В промежутке счётчик ведут сами записи,
+// и уехать ему почти неоткуда: и запись, и удаление идут через writeData() и
+// removeData(), а окончательная чистка корзины дёргает обход сама. Непокрытой
+// остаётся ровно одна дорога — правка файлов руками, мимо сервера.
+//
+// Раньше обход шёл раз в час. На нынешних объёмах он длится минут девять, то
+// есть сервер тратил три с половиной часа процессора в сутки, страхуясь от
+// ручных правок. У потолка, впрочем, цена ошибки другая: завышенный счётчик
+// там означает «места нет» живому человеку при живом диске. Поэтому рядом с
+// лимитом обход снова частый, а перед первым отказом счётчик обязан
+// подтвердиться — см. diskFull().
+const DATA_RESCAN_MS = 24 * 60 * 60 * 1000;
+const DATA_NEAR_FULL = 0.9;                    // доля лимита, после которой считаем чаще
+const DATA_NEAR_RESCAN_MS = 60 * 60 * 1000;    // как часто пересчитывать у потолка
+const DATA_GRACE_MS = 30 * 60 * 1000;          // сколько ждать подтверждения перед отказом
 let dataSize = { bytes: 0, at: 0 };
-function dataBytes() {
-  if (Date.now() - dataSize.at < 60 * 1000) return dataSize.bytes;
+let scanAdded = null;   // не null, пока идёт обход: прибавки за это время
+let fullSince = 0;      // когда счётчик впервые перевалил лимит; 0 — не переваливал
+
+function addDataBytes(delta) {
+  dataSize.bytes += delta;
+  if (scanAdded !== null) { scanAdded += delta; return; }
+  // Подошли к потолку — возвращаемся к частому пересчёту: здесь ошибка
+  // счётчика стоит отказа, а не лишнего гигабайта.
+  if (dataSize.bytes > LIMITS.dataMB * 1024 * 1024 * DATA_NEAR_FULL
+      && Date.now() - dataSize.at > DATA_NEAR_RESCAN_MS) rescanData();
+}
+
+async function walkBytes(dir) {
+  let items = [];
+  try { items = await fs.promises.readdir(dir, { withFileTypes: true }); }
+  catch (e) { return 0; }
   let total = 0;
-  const walk = (dir) => {
-    let items = [];
-    try { items = fs.readdirSync(dir, { withFileTypes: true }); } catch (e) { return; }
-    for (const it of items) {
-      const full = path.join(dir, it.name);
-      if (it.isDirectory()) walk(full);
-      else { try { total += fs.statSync(full).size; } catch (e) { /* исчез — и ладно */ } }
+  for (const it of items) {
+    const full = path.join(dir, it.name);
+    if (it.isDirectory()) total += await walkBytes(full);
+    else {
+      try { total += (await fs.promises.stat(full)).size; }
+      catch (e) { /* исчез — и ладно */ }
     }
-  };
-  walk(path.join(ROOT, 'data'));
-  dataSize = { bytes: total, at: Date.now() };
+  }
   return total;
 }
 
+// Первые полминуты после старта счётчик ещё нулевой и лимит не срабатывает.
+// Это сознательно: отказывать всем, пока считаем, хуже, чем пропустить
+// несколько картинок сверх лимита.
+function rescanData() {
+  if (scanAdded !== null) return;   // обход уже идёт
+  scanAdded = 0;
+  walkBytes(path.join(ROOT, 'data')).then((total) => {
+    // Записи, случившиеся во время обхода, могли в него не попасть —
+    // возвращаем их. Что-то посчитается дважды, но лишний байт безопаснее
+    // недостающего.
+    dataSize = { bytes: total + scanAdded, at: Date.now() };
+  }).catch(() => { /* обход не задался — живём по прежнему числу */ })
+    .finally(() => { scanAdded = null; });
+}
+
+// Писать в data только через это, иначе счётчик разъедется. Перезапись
+// считается по разнице: preview.jpg переписывается каждые несколько секунд,
+// и от полного размера счётчик пух бы на пустом месте.
+function writeData(file, data) {
+  let was = 0;
+  try { was = fs.statSync(file).size; } catch (e) { /* файла ещё не было */ }
+  fs.writeFileSync(file, data);
+  addDataBytes(Buffer.byteLength(data) - was);
+}
+
+function removeData(file) {
+  let was = 0;
+  try { was = fs.statSync(file).size; } catch (e) { /* уже нет */ }
+  fs.unlinkSync(file);
+  addDataBytes(-was);
+}
+
+function dataBytes() {
+  return dataSize.bytes;
+}
+
+// Счётчик ведут сами записи, и уехать ему почти неоткуда — но это «почти»
+// стоит дорого: завысив, сервер ответит «места нет» человеку, который только
+// что нарисовал рыбку, при том что диск свободен. Поэтому первый отказ на
+// веру не выдаём — запускаем обход и пропускаем запись, пока он не подтвердит
+// цифру. За девять минут обхода набежит десяток мегабайт, это несравнимо
+// дешевле ложного отказа. Если обход почему-то не доходит до конца, через
+// DATA_GRACE_MS отказываем всё равно: переполнить диск хуже.
 function diskFull() {
-  return dataBytes() > LIMITS.dataMB * 1024 * 1024;
+  if (dataBytes() <= LIMITS.dataMB * 1024 * 1024) { fullSince = 0; return false; }
+  if (!fullSince) { fullSince = Date.now(); rescanData(); return false; }
+  if (dataSize.at > fullSince) return true;                    // обход подтвердил
+  if (Date.now() - fullSince > DATA_GRACE_MS) return true;     // обход не задался
+  rescanData();
+  return false;
 }
 
 function tanksCount() {
@@ -409,6 +489,24 @@ function send(res, code, body, type) {
   res.end(body);
 }
 
+// Опросы отличаются от прочего API тем, что ответ почти всегда прежний. ETag
+// превращает повтор в 304 без тела, но для этого браузеру нужно право хранить
+// ответ: no-store, как в send(), это запрещает. no-cache хранить разрешает и
+// обязывает перепроверять — ровно то, что нужно.
+function sendPoll(req, res, payload) {
+  const headers = {
+    'Content-Type': 'application/json; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    ETag: payload.etag
+  };
+  if (req.headers['if-none-match'] === payload.etag) {
+    res.writeHead(304, headers);
+    return res.end();
+  }
+  res.writeHead(200, headers);
+  res.end(payload.body);
+}
+
 // Тело запроса с потолком: без него один POST кладёт сервер по памяти.
 function readBody(req, res, onDone) {
   let body = '', size = 0, tooBig = false;
@@ -470,7 +568,10 @@ function purgeTrash() {
   for (const id of readDirNames(TANKS)) {
     gone += purgeOld(path.join(TANKS, id, 'trash'), ttl);
   }
-  if (gone) console.log(`корзина: удалено безвозвратно ${gone} шт. старше ${TRASH_DAYS} дней`);
+  if (gone) {
+    console.log(`корзина: удалено безвозвратно ${gone} шт. старше ${TRASH_DAYS} дней`);
+    rescanData();   // только здесь data уменьшается мимо removeData()
+  }
 }
 
 function readDirNames(dir) {
@@ -560,8 +661,186 @@ function readSettings(t) {
 
 function writeSettings(t, s) {
   ensureTank(t);
-  fs.writeFileSync(t.settings, JSON.stringify(s));
+  writeData(t.settings, JSON.stringify(s));
 }
+
+// ── кэш опросов ────────────────────────────────────────────────────────────
+// Аквариум висит на экране часами и каждые несколько секунд спрашивает одно и
+// то же: кто в тебе живёт и какой фон. Содержимое при этом меняется раз в
+// несколько минут, так что один и тот же ответ собирается сотни раз подряд —
+// а стоит он дорого: для /fish это readdir плюс чтение и разбор каждого json,
+// для /settings — чтение файла и два обхода папок с фонами, причём дважды,
+// потому что backgroundUrl() зовётся и внутри readSettings, и в хендлере.
+//
+// Держим готовый ответ в памяти, а свежесть сверяем по mtime: у папки с
+// рыбками и у самого settings.json. Это один statSync вместо сотни системных
+// вызовов. Сверка выбрана вместо сброса кэша в местах записи нарочно: mtime
+// папки меняется на любое создание, удаление и переименование внутри, поэтому
+// так видны и правки, сделанные мимо сервера, прямо в файлах. Ручной сброс
+// такого не заметил бы вовсе, и его пришлось бы помнить в каждом новом месте
+// записи.
+const CACHE_MAX = 2000;
+const pollCache = new Map();
+
+function cacheSlot(id) {
+  let slot = pollCache.get(id);
+  if (!slot) {
+    // Аквариумов тысячи, а смотрят единицы: без предела карта росла бы на
+    // каждый обход поисковика. Map помнит порядок вставки, так что лишним
+    // оказывается самый давний — те, кого смотрят сейчас, остаются.
+    if (pollCache.size >= CACHE_MAX) pollCache.delete(pollCache.keys().next().value);
+    slot = {};
+    pollCache.set(id, slot);
+  }
+  return slot;
+}
+
+function mtimeOf(file) {
+  try { return fs.statSync(file).mtimeMs; } catch (e) { return 0; }
+}
+
+// Метка версии — время правки и длина ответа, как у статики ниже: считать хэш
+// на каждый ответ дороже, чем его отдать.
+function fishPayload(t) {
+  const slot = cacheSlot(t.id);
+  const at = mtimeOf(t.fish);
+  if (!slot.fish || slot.fish.at !== at) {
+    const body = JSON.stringify(listFish(t));
+    slot.fish = { at, body, etag: `W/"f${Math.trunc(at).toString(36)}-${body.length.toString(36)}"` };
+  }
+  return slot.fish;
+}
+
+function settingsPayload(t, ev) {
+  const slot = cacheSlot(t.id);
+  if (!slot.settings || slot.settings.at !== mtimeOf(t.settings)) {
+    const s = readSettings(t);
+    // readSettings мог дописать потерянный фон — тогда файл уже другой, и
+    // запомнить надо время после записи, иначе кэш протух бы сразу.
+    slot.settings = {
+      at: mtimeOf(t.settings),
+      base: Object.assign({}, s, { backgroundUrl: backgroundUrl(t, s.background) })
+    };
+  }
+  // Кормление живёт в памяти и меняется чаще настроек, поэтому в кэш не идёт.
+  // Но в метку версии входит: иначе экран получил бы 304 и не заметил еды.
+  const body = JSON.stringify(Object.assign({}, slot.settings.base, { feedAt: ev.feedAt }));
+  const ver = Math.trunc(slot.settings.at).toString(36) + '-' + (ev.feedAt || 0).toString(36);
+  return { body, etag: `W/"s${ver}"` };
+}
+
+// ── события: сервер сам сообщает экрану об изменениях ──────────────────────
+// Даже с кэшем и 304 опросы оставались главной нагрузкой: экран спрашивал
+// /settings каждые 3 с и /fish каждые 5 с, сотня открытых экранов — это
+// 3–4 тысячи запросов в минуту, 97% всего трафика сервера, и каждый из них
+// будил Traefik, node и писал строку в лог. Ответ при этом почти всегда
+// «ничего не изменилось».
+//
+// Теперь экран открывает один поток GET …/events (Server-Sent Events) и
+// молчит. Сервер присылает событие, когда что-то поменялось, и пустой
+// комментарий-пинг раз в SUB_PING_MS, чтобы соединение не закрыли NAT и
+// прокси по бездействию. Старые /settings и /fish остаются: это запасной
+// путь для браузеров без EventSource и на случай, если потоку отказали.
+//
+// Об изменениях сервер узнаёт двумя путями. Быстрый — notify() в местах
+// записи: корм и новая рыбка появляются на экране сразу. Надёжный — тик раз
+// в SUB_TICK_MS по аквариумам с подписчиками: он сверяет те же mtime, что и
+// кэш опросов, и потому видит правки мимо сервера (панель модерации правит
+// файлы по ssh). Тик дёшев: один-два statSync на аквариум, и только на те,
+// что сейчас кто-то смотрит.
+//
+// Пределы — от зацикленного клиента и от чужого любопытства: на аквариум и
+// на всех. Сверх предела ответ 503, и клиент уходит в редкий опрос.
+const SUB_PER_TANK = 50;
+const SUB_TOTAL = 2000;
+const SUB_TICK_MS = 2000;
+const SUB_PING_MS = 25000;
+const subscribers = new Map();   // id → { t, ev, set: Set<res>, fish: etag, settings: etag }
+let subTotal = 0;
+
+function sseWrite(res, event, payload) {
+  res.write(`event: ${event}\nid: ${payload.etag}\ndata: ${payload.body}\n\n`);
+}
+
+// Рассылает подписчикам аквариума то, что изменилось с прошлой рассылки.
+// Метка версии общая на аквариум, а не на клиента: все смотрят одно и то же,
+// а новичок получает полный снимок при подключении.
+function pushTank(sub) {
+  if (!sub.set.size) return;
+  // Аквариум могли убрать мимо сервера (панель модерации переносит папки по
+  // ssh). Тогда потоки закрываем, а не собираем ответ: settingsPayload по
+  // пути дописал бы фон и тем самым воскресил бы пустой аквариум.
+  if (!fs.existsSync(sub.t.dir)) return dropSubscribers(sub.t.id);
+  let fish, settings;
+  try {
+    fish = fishPayload(sub.t);
+    settings = settingsPayload(sub.t, sub.ev);
+  } catch (e) {
+    return;   // не собрался ответ — попробуем на следующем тике
+  }
+  const changed = [];
+  if (fish.etag !== sub.fish) { sub.fish = fish.etag; changed.push(['fish', fish]); }
+  if (settings.etag !== sub.settings) { sub.settings = settings.etag; changed.push(['settings', settings]); }
+  if (!changed.length) return;
+  for (const res of sub.set) {
+    for (const [event, payload] of changed) sseWrite(res, event, payload);
+  }
+}
+
+function notify(t) {
+  const sub = subscribers.get(t.id);
+  if (sub) pushTank(sub);
+}
+
+// Аквариум удалили — потоки закрываем. Браузер переподключится, получит 404
+// и по правилам EventSource больше пробовать не станет.
+function dropSubscribers(id) {
+  const sub = subscribers.get(id);
+  if (!sub) return;
+  subscribers.delete(id);
+  const set = sub.set;
+  sub.set = new Set();   // иначе обработчик close списал бы каждого второй раз
+  for (const res of set) { subTotal--; res.end(); }
+}
+
+function subscribe(req, res, t, ev) {
+  let sub = subscribers.get(t.id);
+  if (subTotal >= SUB_TOTAL || (sub && sub.set.size >= SUB_PER_TANK)) {
+    return send(res, 503, '{"error":"слишком много открытых экранов"}');
+  }
+  if (!sub) {
+    sub = { t, ev, set: new Set(), fish: null, settings: null };
+    subscribers.set(t.id, sub);
+  }
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-store',
+    // Прокси с буферизацией ответа (nginx) держали бы события у себя до
+    // конца потока, то есть навсегда. Traefik и так не буферизует.
+    'X-Accel-Buffering': 'no'
+  });
+  if (res.socket) res.socket.setNoDelay(true);
+  res.write(`retry: 5000\n\n`);
+  // Снимок — всегда, даже если у аквариума ничего не менялось: экран только
+  // что открылся или переподключился и не знает текущего состояния.
+  const fish = fishPayload(t), settings = settingsPayload(t, ev);
+  sub.fish = fish.etag; sub.settings = settings.etag;
+  sseWrite(res, 'settings', settings);
+  sseWrite(res, 'fish', fish);
+
+  sub.set.add(res); subTotal++;
+  res.on('error', () => {});   // клиент оборвал связь на полуслове — это не авария
+  req.on('close', () => {
+    if (!sub.set.delete(res)) return;
+    subTotal--;
+    if (!sub.set.size) subscribers.delete(t.id);
+  });
+}
+
+setInterval(() => { for (const sub of subscribers.values()) pushTank(sub); }, SUB_TICK_MS).unref();
+setInterval(() => {
+  for (const sub of subscribers.values()) for (const res of sub.set) res.write(': ping\n\n');
+}, SUB_PING_MS).unref();
 
 // ── API внутри аквариума ───────────────────────────────────────────────────
 function handleTankApi(req, res, t, url) {
@@ -600,7 +879,7 @@ function handleTankApi(req, res, t, url) {
       const buf = Buffer.from(data.image.slice(m[0].length), 'base64');
       if (!buf.length) return send(res, 400, '{"error":"пустой снимок"}');
       ensureTank(t);
-      fs.writeFileSync(t.preview, buf);
+      writeData(t.preview, buf);
       send(res, 200, JSON.stringify({ ok: true, bytes: buf.length }));
     });
   }
@@ -627,7 +906,7 @@ function handleTankApi(req, res, t, url) {
       meta.salt = crypto.randomBytes(16).toString('hex');
       meta.hash = hashPass(pass, meta.salt);
       ensureTank(t);
-      fs.writeFileSync(t.meta, JSON.stringify(meta));
+      writeData(t.meta, JSON.stringify(meta));
       console.log(`пароль аквариума ${t.id} изменён`);
       send(res, 200, JSON.stringify({ ok: true }));
     });
@@ -639,7 +918,7 @@ function handleTankApi(req, res, t, url) {
       const meta = readMeta(t);
       meta.name = String(data.name || '').trim().slice(0, 60) || meta.name;
       ensureTank(t);
-      fs.writeFileSync(t.meta, JSON.stringify(meta));
+      writeData(t.meta, JSON.stringify(meta));
       send(res, 200, JSON.stringify(publicMeta(meta)));
     });
   }
@@ -651,13 +930,19 @@ function handleTankApi(req, res, t, url) {
       fs.mkdirSync(TANKS_TRASH, { recursive: true });
       fs.renameSync(t.dir, path.join(TANKS_TRASH, t.id + '-' + Date.now()));
     }
+    dropSubscribers(t.id);
     events.delete(t.id);
+    pollCache.delete(t.id);
     console.log(`- аквариум ${t.id} → в корзину (data/trash-tanks)`);
     return send(res, 200, '{"ok":true}');
   }
 
+  if (req.method === 'GET' && url === '/events') {
+    return subscribe(req, res, t, ev);
+  }
+
   if (req.method === 'GET' && url === '/fish') {
-    return send(res, 200, JSON.stringify(listFish(t)));
+    return sendPoll(req, res, fishPayload(t));
   }
 
   const texMatch = url.match(/^\/fish\/([a-z0-9-]+)\/texture\.png$/);
@@ -688,11 +973,12 @@ function handleTankApi(req, res, t, url) {
         const model = list.find((m) => m.name === data.model);
         if (!model) return send(res, 400, '{"error":"нет такой модели в паке"}');
         ensureTank(t);
-        fs.writeFileSync(path.join(t.fish, fid + '.json'), JSON.stringify({
+        writeData(path.join(t.fish, fid + '.json'), JSON.stringify({
           id: fid, type: 'pack', model: model.name, title: model.title,
           created: new Date().toISOString()
         }));
         console.log(`+ готовый ${model.name} в ${t.id} — всего ${listFish(t).length}`);
+        notify(t);
         return send(res, 200, JSON.stringify({ ok: true, id: fid }));
       }
 
@@ -707,14 +993,15 @@ function handleTankApi(req, res, t, url) {
       // прямо в сцену, и рыбка «size: 100» заслонила бы весь аквариум.
       const size = Math.round(Math.min(1.5, Math.max(0.5, Number(data.size) || 1)) * 100) / 100;
       const png = Buffer.from(data.texture.split(',')[1], 'base64');
-      fs.writeFileSync(path.join(t.fish, fid + '.png'), png);
+      writeData(path.join(t.fish, fid + '.png'), png);
       const rec = { id: fid, kind: String(data.kind), size, created: new Date().toISOString() };
       // Футбольные поля: команда игрока и признак «текстура — фото лица».
       // Белый список, а не String(): поле уходит прямо в сцену.
       if (data.team === 'red' || data.team === 'blue') rec.team = data.team;
       if (data.face === true) rec.face = true;
-      fs.writeFileSync(path.join(t.fish, fid + '.json'), JSON.stringify(rec));
+      writeData(path.join(t.fish, fid + '.json'), JSON.stringify(rec));
       console.log(`+ рыбка ${data.kind} в ${t.id} (${Math.round(png.length / 1024)} КБ) — всего ${listFish(t).length}`);
+      notify(t);
       send(res, 200, JSON.stringify({ ok: true, id: fid }));
     });
   }
@@ -723,7 +1010,7 @@ function handleTankApi(req, res, t, url) {
   if (req.method === 'DELETE' && delMatch) {
     if (!authed(req, t, ev)) return denied(res, t, ev);
     const n = trashFish(t, delMatch[1]);
-    if (n) console.log(`- рыбка ${delMatch[1]} из ${t.id} → в корзину`);
+    if (n) { console.log(`- рыбка ${delMatch[1]} из ${t.id} → в корзину`); notify(t); }
     return send(res, n ? 200 : 404, JSON.stringify({ ok: !!n }));
   }
 
@@ -732,6 +1019,7 @@ function handleTankApi(req, res, t, url) {
     const list = listFish(t);
     list.forEach((f) => trashFish(t, f.id));
     console.log(`аквариум ${t.id} очищен, ${list.length} рыбок → в корзину`);
+    notify(t);
     return send(res, 200, JSON.stringify({ ok: true, removed: list.length }));
   }
 
@@ -758,7 +1046,7 @@ function handleTankApi(req, res, t, url) {
       const ext = m[1] === 'jpeg' ? '.jpg' : '.' + m[1];
       const name = UPLOAD_PREFIX + Date.now().toString(36) + '-' +
                    Math.random().toString(36).slice(2, 6) + ext;
-      fs.writeFileSync(path.join(t.backgrounds, name), buf);
+      writeData(path.join(t.backgrounds, name), buf);
       console.log(`+ фон ${name} в ${t.id} (${Math.round(buf.length / 1024)} КБ)`);
       send(res, 200, JSON.stringify({
         ok: true, name, url: '/data/tanks/' + t.id + '/backgrounds/' + name
@@ -774,23 +1062,20 @@ function handleTankApi(req, res, t, url) {
     }
     const file = path.join(t.backgrounds, name);
     if (!fs.existsSync(file)) return send(res, 404, '{"error":"not found"}');
-    fs.unlinkSync(file);
+    removeData(file);
     // Если удалили фон, который сейчас стоит в сцене, — выдаём случайный,
     // иначе аквариум остался бы с битой ссылкой до следующей смены настроек.
     const s = readSettings(t);
     if (s.background === name) {
       writeSettings(t, { background: randomBackground(worldOf(readMeta(t))) });
+      notify(t);
     }
     console.log(`- фон ${name} из ${t.id} удалён`);
     return send(res, 200, '{"ok":true}');
   }
 
   if (req.method === 'GET' && url === '/settings') {
-    const s = readSettings(t);
-    return send(res, 200, JSON.stringify(Object.assign(s, {
-      backgroundUrl: backgroundUrl(t, s.background),
-      feedAt: ev.feedAt
-    })));
+    return sendPoll(req, res, settingsPayload(t, ev));
   }
 
   if ((req.method === 'POST' || req.method === 'PUT') && url === '/settings') {
@@ -804,6 +1089,7 @@ function handleTankApi(req, res, t, url) {
           ? merged.background : cur.background
       };
       writeSettings(t, clean);
+      notify(t);
       send(res, 200, JSON.stringify(clean));
     });
   }
@@ -811,6 +1097,7 @@ function handleTankApi(req, res, t, url) {
   if (req.method === 'POST' && url === '/feed') {
     ev.feedAt = Date.now();
     console.log(`🐟 корм насыпан в ${t.id}`);
+    notify(t);
     return send(res, 200, JSON.stringify({ ok: true, feedAt: ev.feedAt }));
   }
 
@@ -888,7 +1175,7 @@ function handleApi(req, res, url) {
         salt,
         hash: hashPass(pass, salt)
       };
-      fs.writeFileSync(t.meta, JSON.stringify(meta));
+      writeData(t.meta, JSON.stringify(meta));
       // Новый аквариум или сад сразу с картинкой: какая достанется — дело
       // случая. Футбол рисует стадион сам, фон-фотография ему не нужен.
       const background = randomBackground(world);
@@ -979,7 +1266,10 @@ function cacheControl(ext, url) {
 }
 
 http.createServer((req, res) => {
-  const url = decodeURIComponent(req.url.split('?')[0]);
+  // битый %-escape от сканеров (`/%`, `/%E0%A4%A`) ронял весь процесс
+  let url;
+  try { url = decodeURIComponent(req.url.split('?')[0]); }
+  catch { res.writeHead(400); return res.end(); }
 
   if (url.startsWith('/api/')) return handleApi(req, res, url);
 
@@ -1030,4 +1320,10 @@ http.createServer((req, res) => {
   // редко, а обещание «через 30 дней» должно выполняться и без перезапуска.
   purgeTrash();
   setInterval(purgeTrash, 24 * 60 * 60 * 1000).unref();
+
+  // Размер data: считаем при старте и раз в сутки, в фоне. Между обходами
+  // счётчик поправляют сами записи — см. writeData(), — а у потолка обход
+  // учащается сам, см. addDataBytes().
+  rescanData();
+  setInterval(rescanData, DATA_RESCAN_MS).unref();
 });
